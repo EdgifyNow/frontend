@@ -104,10 +104,8 @@ a{text-decoration:none;color:inherit}
 </style>
 </head>
 <body>
+@include('partials.config-script')
 <div id="egApp"></div>
-<script>
-window.EDGIFYNOW_API_BASE = "{{ config('services.edgifynow.api_base', 'https://api-dev.edgifynow.com') }}";
-</script>
 <script src="{{ asset('js/portal.js') }}"></script>
 </body>
 </html>

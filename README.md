@@ -1,58 +1,84 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# EdgifyNow Frontend
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+Standalone Laravel application containing:
 
-## About Laravel
+- **Admin & Client Portal** (`/` or `/portal`) — JWT-authenticated, role-based (platform admin vs. tenant owner/employee). Login, dashboard, CRM leads/contacts, knowledge base, AI assistant config + test chat, tenant management (admin), Instant Demo tool.
+- **Public Website Widget** (`/widget?key=WIDGET_KEY`) — anonymous, embeddable chat widget for any client's website. Uses a tenant-scoped public widget key (`X-API-Key` header), never a login token. Supports live AI chat with conversation continuity, lead capture, and appointment booking.
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+This app does **not** depend on WordPress in any way: no `wp-load.php`, no WordPress database, no WordPress sessions, no WordPress plugins. It's a plain Laravel 13 / PHP 8.3 app that can be deployed anywhere Laravel runs. WordPress's only involvement is embedding the widget via a plain `<iframe>` pointing at this app's `/widget` URL — see "Embedding the widget" below.
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+## Requirements
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+- PHP `^8.3`
+- Composer 2.x
+- Extensions: `bcmath`, `ctype`, `curl`, `dom`, `fileinfo`, `filter`, `hash`, `mbstring`, `openssl`, `pcre`, `pdo`, `session`, `tokenizer`, `xml` (all standard with a normal PHP install; see `Dockerfile` for the exact `apt`/`docker-php-ext-install` list)
+- Web server: Apache (with `mod_rewrite`) or Nginx + PHP-FPM. Document root **must** be the `public/` directory, not the project root.
+- No database is required for the app to function — all data comes from the external EdgifyNow API. Laravel's own session/cache/queue are configured to use the `file`/`sync` drivers precisely so no DB is needed.
 
-## Learning Laravel
-
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
-
-In addition, [Laracasts](https://laracasts.com) contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
-
-You can also watch bite-sized lessons with real-world projects on [Laravel Learn](https://laravel.com/learn), where you will be guided through building a Laravel application from scratch while learning PHP fundamentals.
-
-## Agentic Development
-
-Laravel's predictable structure and conventions make it ideal for AI coding agents like Claude Code, Cursor, and GitHub Copilot. Install [Laravel Boost](https://laravel.com/docs/ai) to supercharge your AI workflow:
+## Local setup
 
 ```bash
-composer require laravel/boost --dev
-
-php artisan boost:install
+composer install
+cp .env.example .env
+php artisan key:generate
 ```
 
-Boost provides your agent 15+ tools and skills that help agents build Laravel applications while following best practices.
+Edit `.env` and set the environment block (see "Environment configuration" below) — for local staging testing, the defaults in `.env.example` already point at `api-dev.edgifynow.com`.
 
-## Contributing
+**Option A — XAMPP / Apache** (recommended if you're already running XAMPP):
+Place this folder under `htdocs/`, then browse to:
+```
+http://localhost/<folder-name>/public/
+```
+The `/public/` segment is required — it's Laravel's actual web root.
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+**Option B — Laravel's built-in server:**
+```bash
+php artisan serve --port=8901
+```
+Then browse to `http://127.0.0.1:8901/`.
 
-## Code of Conduct
+**Health check:** `GET /up` — returns HTTP 200 and "Application up" when the app is healthy (this is Laravel's built-in health-check route, not custom code).
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+## Environment configuration
 
-## Security Vulnerabilities
+Everything environment-specific is read from **one place**: `config/services.php` → the `edgifynow` array, which reads from `.env`. Nothing in `resources/views` or `public/js` hardcodes `api-dev`/`app-dev`/`app` domains directly.
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+| Variable | Staging | Production |
+|---|---|---|
+| `ENVIRONMENT_NAME` | `staging` | `production` |
+| `API_BASE_URL` | `https://api-dev.edgifynow.com` | `https://api.edgifynow.com` |
+| `APP_BASE_URL` | `https://app-dev.edgifynow.com` | `https://app.edgifynow.com` |
+| `WIDGET_BASE_URL` | `https://app-dev.edgifynow.com/widget` | `https://app.edgifynow.com/widget` |
 
-## License
+These are injected into every page (both portal and widget) via `resources/views/partials/config-script.blade.php`, which sets `window.EDGIFY_CONFIG` — the JS in `public/js/portal.js` and `public/js/widget.js` reads from that object, never a hardcoded string.
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+**Safety check** (`app/Support/EnvironmentGuard.php`, run on every request via `routes/web.php`):
+- If `ENVIRONMENT_NAME=production` and `API_BASE_URL` points at `api-dev.*` → the app **throws and refuses to serve the page**. This is deliberate: a production deployment silently talking to staging (or vice versa) is worse than a visible crash.
+- If `ENVIRONMENT_NAME=staging` and `API_BASE_URL` points at the production API → a visible red error banner is shown at the top of the page (non-fatal, since local/staging experimentation shouldn't hard-crash, but it must not be silently ignored either).
+- Whenever `ENVIRONMENT_NAME=staging`, a small **STAGING** badge is shown in the top-right corner of every page, so it's never mistaken for production at a glance.
+
+## Embedding the widget
+
+Once deployed, give each client this snippet (swap in their tenant's own widget key):
+
+```html
+<iframe
+  src="https://app-dev.edgifynow.com/widget?key=TENANT_WIDGET_KEY"
+  title="Business Assistant"
+  width="400"
+  height="600"
+  style="border:0; position:fixed; right:20px; bottom:20px; z-index:9999;"
+  allow="clipboard-write">
+</iframe>
+```
+
+Replace `app-dev.edgifynow.com` with `app.edgifynow.com` for a production client. **The widget key is the only thing that changes per client/tenant** — the iframe `src` and the rest of the snippet stay identical.
+
+The widget key is read client-side from the URL and sent only as the `X-API-Key` header on requests to `/api/v1/public/*`. It is never rendered into the page, never logged, and no tenant ID, JWT, admin credential, or backend secret is ever present in the browser for this page.
+
+## What's *not* here yet
+
+- No automated tests for the widget/portal JS (there's no JS test runner wired up — flag if you want one added).
+- No CI/CD pipeline — deployment today is manual (`git pull` + `composer install --no-dev` on the target, or the provided `Dockerfile`).
+- The `/public/*` API endpoints currently reject cross-origin requests from anywhere except `https://edgifynow.com` (confirmed via live testing) — since the whole point of the widget is to be embeddable on *any* client's website, this needs a permissive/wildcard CORS policy on those specific endpoints, not a fixed allowlist. Flagged separately to the backend team.

@@ -36,7 +36,14 @@ return [
     ],
 
     'edgifynow' => [
-        'api_base' => env('EDGIFYNOW_API_BASE', 'https://api-dev.edgifynow.com'),
+        // Single source of truth for every URL the frontend needs. Nothing in
+        // resources/views or public/js should hardcode api-dev/app-dev/app
+        // domains directly -- they all read from this config (which reads
+        // from .env), and .env is what changes between staging and production.
+        'environment_name' => env('ENVIRONMENT_NAME', 'staging'),
+        'api_base_url' => env('API_BASE_URL', 'https://api-dev.edgifynow.com'),
+        'app_base_url' => env('APP_BASE_URL', 'http://localhost'),
+        'widget_base_url' => env('WIDGET_BASE_URL', 'http://localhost/edgifynow-portal-laravel/public/widget'),
     ],
 
 ];

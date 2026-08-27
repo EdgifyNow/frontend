@@ -1,5 +1,5 @@
 (function(){
-  var API_BASE = window.EDGIFYNOW_API_BASE || "https://api-dev.edgifynow.com";
+  var API_BASE = (window.EDGIFY_CONFIG && window.EDGIFY_CONFIG.API_BASE_URL) || "https://api-dev.edgifynow.com";
   var TOKEN_KEY = "eg_portal_token";
   var root = document.getElementById("egApp");
   function AND(){ for (var i=0;i<arguments.length;i++){ if(!arguments[i]) return false; } return true; }
