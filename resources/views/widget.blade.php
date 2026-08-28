@@ -4,6 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>Business Assistant</title>
+<meta name="robots" content="noindex, nofollow" />
 <style>
 :root{
   --wg-primary:#1f5fbf;

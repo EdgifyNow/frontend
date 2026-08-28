@@ -75,10 +75,36 @@ Once deployed, give each client this snippet (swap in their tenant's own widget 
 
 Replace `app-dev.edgifynow.com` with `app.edgifynow.com` for a production client. **The widget key is the only thing that changes per client/tenant** — the iframe `src` and the rest of the snippet stay identical.
 
-The widget key is read client-side from the URL and sent only as the `X-API-Key` header on requests to `/api/v1/public/*`. It is never rendered into the page, never logged, and no tenant ID, JWT, admin credential, or backend secret is ever present in the browser for this page.
+The widget key is read client-side from the URL and sent only as the `X-API-Key` header on requests to `/api/v1/public/*`. This app never renders it into the page and never writes it to `console.log`. It's important to be precise about what that does and doesn't guarantee, though: because it's a query-string value (`?key=...`), it **can** still appear in browser history, the referrer header of outbound requests, and web server access logs on any server it passes through — that's inherent to putting any value in a URL, not something client-side code can prevent. Treat it the same way you'd treat any embeddable-widget public key (Stripe's publishable key, Intercom's app ID, etc.): safe to expose in a browser, tenant-scoped, and rotatable, but not something to also paste into chat, tickets, or commits unnecessarily. No tenant ID, JWT, admin credential, or backend secret is ever present in the browser for this page — that guarantee does hold.
 
-## What's *not* here yet
+## Testing
 
-- No automated tests for the widget/portal JS (there's no JS test runner wired up — flag if you want one added).
-- No CI/CD pipeline — deployment today is manual (`git pull` + `composer install --no-dev` on the target, or the provided `Dockerfile`).
-- The `/public/*` API endpoints currently reject cross-origin requests from anywhere except `https://edgifynow.com` (confirmed via live testing) — since the whole point of the widget is to be embeddable on *any* client's website, this needs a permissive/wildcard CORS policy on those specific endpoints, not a fixed allowlist. Flagged separately to the backend team.
+```bash
+php artisan test
+```
+
+16 tests covering: portal/widget pages render, both are `noindex`, both expose `window.EDGIFY_CONFIG`, the widget key is never echoed into server-rendered HTML, `/up` reports healthy, and `EnvironmentGuard`'s four staging/production combinations behave correctly (including that a production instance pointed at the staging API throws rather than silently running).
+
+Not covered yet: actual browser-driven interaction (typing in the chat box, clicking "book appointment", etc.) — there's no JS test runner wired up for that. The PHP tests above cover what the server renders and the environment-safety logic; they don't simulate a user clicking through the widget.
+
+## Deployment
+
+There's no CI/CD pipeline yet — release process today:
+
+1. Everything lands on `frontend-staging-handover` (or its successor) via normal commits.
+2. When a batch of changes is ready to actually deploy, tag it — deploy an **exact tag**, never a moving branch:
+   ```bash
+   git tag -a v0.1.0-rc1 -m "Description of what's in this release"
+   git push origin v0.1.0-rc1
+   ```
+3. On the target server: `git fetch --tags && git checkout v0.1.0-rc1`, then either build the `Dockerfile` or run manually:
+   ```bash
+   composer install --no-dev --optimize-autoloader
+   php artisan config:cache && php artisan route:cache && php artisan view:cache
+   ```
+4. Confirm `.env` on that target has the correct `ENVIRONMENT_NAME`/`API_BASE_URL`/`APP_BASE_URL`/`WIDGET_BASE_URL` for that environment (staging vs. production — see table above), then verify `GET /up` returns 200 before considering the deploy live.
+
+## Known limitations
+
+- **JWT stored in `localStorage`** (portal only — the widget never handles a JWT at all). Acceptable for staging, but a production deployment should move to a secure `HttpOnly` cookie via a small backend-for-frontend (BFF) endpoint instead, so the token isn't reachable from JS at all (mitigates XSS token theft). Not implemented here — this is a real architectural change, not a config tweak, and is called out rather than silently left for later.
+- The `/public/*` API endpoints currently reject cross-origin requests from anywhere except `https://edgifynow.com` (confirmed via live testing from `http://localhost`) — since the whole point of the widget is to be embeddable on *any* client's website, this needs a permissive/wildcard CORS policy on those specific endpoints, not a fixed allowlist. Flagged separately to the backend team; blocks live end-to-end verification of the widget until resolved.

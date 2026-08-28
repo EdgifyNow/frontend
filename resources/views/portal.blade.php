@@ -4,6 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>EdgifyNow Portal</title>
+<meta name="robots" content="noindex, nofollow" />
 <style>
 :root{
   --blue:#1f5fbf;

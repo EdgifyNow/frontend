@@ -466,9 +466,41 @@
     document.querySelectorAll("[data-doc-download]").forEach(function(el){
       el.addEventListener("click", function(){
         var id = el.getAttribute("data-doc-download");
-        window.open(API_BASE + "/api/v1/documents/" + id + "/download", "_blank");
+        downloadDocument(id, el);
       });
     });
+  }
+
+  // Document downloads are authenticated (the API requires the same Bearer
+  // token as every other call here), so a plain <a href> / window.open()
+  // can't be used - the browser wouldn't send the Authorization header.
+  // Fetch the file as a blob with the header attached, then hand the
+  // browser a temporary object URL to save.
+  function downloadDocument(id, triggerEl){
+    var doc = (state.documents || []).filter(function(d){ return d.id === id; })[0];
+    var filename = (doc && doc.filename) || "document";
+    var originalText = triggerEl ? triggerEl.textContent : null;
+    if (triggerEl) { triggerEl.disabled = true; triggerEl.textContent = "Downloading..."; }
+    fetch(API_BASE + "/api/v1/documents/" + id + "/download", {
+      headers: { "Authorization": "Bearer " + state.token }
+    })
+      .then(function(res){
+        if (res.status === 401) { doLogout(); throw new Error("Session expired. Please log in again."); }
+        if (!res.ok) throw new Error("Download failed (" + res.status + ")");
+        return res.blob();
+      })
+      .then(function(blob){
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      })
+      .catch(function(err){ showToast(err.message, true); })
+      .then(function(){ if (triggerEl) { triggerEl.disabled = false; triggerEl.textContent = originalText; } });
   }
 
   // ---- Assistant ----
