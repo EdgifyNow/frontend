@@ -56,6 +56,22 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Asset URL
+    |--------------------------------------------------------------------------
+    |
+    | Optional explicit override for asset() URLs (used by portal.js/widget.js
+    | <script src>). With TrustProxies configured correctly (bootstrap/app.php)
+    | this shouldn't be needed -- asset() already generates the right scheme
+    | from the trusted X-Forwarded-Proto header. Set ASSET_URL only if a
+    | deployment can't or doesn't want to rely on that (e.g. no proxy headers
+    | available at all). Left unset by default; never hardcode a domain here.
+    |
+    */
+
+    'asset_url' => env('ASSET_URL'),
+
+    /*
+    |--------------------------------------------------------------------------
     | Application Timezone
     |--------------------------------------------------------------------------
     |

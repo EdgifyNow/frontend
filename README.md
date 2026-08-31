@@ -56,7 +56,15 @@ These are injected into every page (both portal and widget) via `resources/views
 **Safety check** (`app/Support/EnvironmentGuard.php`, run on every request via `routes/web.php`):
 - If `ENVIRONMENT_NAME=production` and `API_BASE_URL` points at `api-dev.*` → the app **throws and refuses to serve the page**. This is deliberate: a production deployment silently talking to staging (or vice versa) is worse than a visible crash.
 - If `ENVIRONMENT_NAME=staging` and `API_BASE_URL` points at the production API → a visible red error banner is shown at the top of the page (non-fatal, since local/staging experimentation shouldn't hard-crash, but it must not be silently ignored either).
+- If `APP_BASE_URL` is `https://` but generated asset URLs (`asset('js/portal.js')`) come back `http://` → same visible red banner. This is the exact bug that blanked the page on first staging deploy (see "HTTPS / reverse proxy" below) — now caught instead of silently breaking `<script src>`.
 - Whenever `ENVIRONMENT_NAME=staging`, a small **STAGING** badge is shown in the top-right corner of every page, so it's never mistaken for production at a glance.
+
+### HTTPS / reverse proxy
+
+This app is always deployed behind a TLS-terminating reverse proxy (see `Dockerfile`: the container itself listens on plain HTTP). `bootstrap/app.php` configures `TrustProxies` to trust the `X-Forwarded-Proto` header from that proxy, so `asset()`/`url()`/`route()` correctly generate `https://` links without any extra configuration.
+
+- `TRUSTED_PROXIES` (default `*`) — trusts the immediate connecting peer, which in this container topology is always the proxy/load balancer. Restrict it to a comma-separated IP/CIDR list once that proxy's address is fixed.
+- `ASSET_URL` (optional, unset by default) — an explicit override for generated asset URLs, only needed if a specific deployment can't rely on proxy headers at all. Never hardcode a domain here or anywhere else in the codebase.
 
 ## Embedding the widget
 

@@ -38,7 +38,35 @@ class EnvironmentGuard
             ];
         }
 
+        if ($mismatch = self::assetSchemeMismatch()) {
+            return ['ok' => false, 'message' => $mismatch];
+        }
+
         return ['ok' => true, 'message' => null];
+    }
+
+    /**
+     * Catches the exact class of bug that broke portal.js on first staging
+     * deploy: APP_BASE_URL says https, but asset() is actually generating
+     * http:// links (untrusted proxy headers, or a scheme mismatch in an
+     * explicit ASSET_URL override) -- which silently blanks the page rather
+     * than throwing, so it needs its own visible check here.
+     */
+    private static function assetSchemeMismatch(): ?string
+    {
+        $appBaseUrl = config('services.edgifynow.app_base_url', '');
+
+        if (! str_starts_with($appBaseUrl, 'https://')) {
+            return null;
+        }
+
+        $generatedAssetUrl = asset('js/portal.js');
+
+        if (str_starts_with($generatedAssetUrl, 'http://')) {
+            return "Configuration error: APP_BASE_URL ({$appBaseUrl}) is https, but generated asset URLs ({$generatedAssetUrl}) are http. Check TRUSTED_PROXIES/ASSET_URL — see .env.example.";
+        }
+
+        return null;
     }
 
     public static function isStaging(): bool

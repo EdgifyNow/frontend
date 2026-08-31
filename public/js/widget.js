@@ -33,6 +33,51 @@
     return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
   }
 
+  // ---- Form validation (name / email / US phone / future date-time) ----
+  function isValidEmail(email){
+    // Deliberately simple (no full RFC 5322 attempt) -- catches the actual
+    // typo/mistake case ("no @", "no domain") without rejecting valid but
+    // unusual real-world addresses.
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  }
+  function usPhoneDigits(phone){
+    // Accepts any of: 5551234567, (555) 123-4567, 555-123-4567,
+    // +1 555 123 4567, 1-555-123-4567 -- normalizes to 10 bare digits, or
+    // null if it isn't a valid US number shape (must be 10 digits, or 11
+    // digits with a leading country code 1).
+    var digits = String(phone || "").replace(/\D/g, "");
+    if (digits.length === 11 && digits.charAt(0) === "1") digits = digits.slice(1);
+    return digits.length === 10 ? digits : null;
+  }
+  function formatUsPhoneE164(phone){
+    var digits = usPhoneDigits(phone);
+    return digits ? "+1" + digits : null;
+  }
+  function isFutureDateTime(dateInputValue){
+    if (!dateInputValue) return false;
+    var d = new Date(dateInputValue);
+    return !isNaN(d.getTime()) && d.getTime() > Date.now();
+  }
+  // FastAPI/Pydantic 422 responses shape `detail` as an array of
+  // {loc, msg, type} objects, e.g. [{"loc":["body","email"],"msg":"field
+  // required", ...}]. JSON.stringify-ing that whole array (the previous
+  // behaviour) produced an unreadable blob; this turns it into
+  // "email: field required" style lines instead.
+  function describeApiError(err){
+    var raw = err && err.message;
+    if (!raw) return "Something went wrong. Please try again.";
+    try {
+      var parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.map(function(item){
+          var field = Array.isArray(item.loc) ? item.loc[item.loc.length - 1] : null;
+          return (field ? field + ": " : "") + (item.msg || "invalid value");
+        }).join("; ");
+      }
+    } catch (e) { /* not JSON -- fall through to the raw message */ }
+    return raw;
+  }
+
   function api(path, opts){
     opts = opts || {};
     var headers = { "Content-Type": "application/json", "X-API-Key": WIDGET_KEY };
@@ -141,9 +186,9 @@
     var result = state.leadResult ? '<div class="wg-loading" style="color:#168a5b">Thanks - we\'ve got your details.</div>' : "";
     var errorHtml = state.leadFormError ? '<div class="wg-loading" style="color:#c24141">' + esc(state.leadFormError) + '</div>' : "";
     return '<div class="wg-panel"><h4>Leave your contact details</h4>' +
-      '<input id="wgLeadName" placeholder="Your name" />' +
-      '<input id="wgLeadEmail" type="email" placeholder="Email" />' +
-      '<input id="wgLeadPhone" placeholder="Phone" />' +
+      '<input id="wgLeadName" placeholder="Your name" required />' +
+      '<input id="wgLeadEmail" type="email" placeholder="Email" required />' +
+      '<input id="wgLeadPhone" type="tel" placeholder="Phone, e.g. (555) 123-4567" required />' +
       '<div class="wg-panel-actions">' +
       '<button class="wg-panel-btn primary" id="wgLeadSubmit">Send</button>' +
       '<button class="wg-panel-btn ghost" id="wgPanelCancel">Cancel</button>' +
@@ -154,10 +199,10 @@
     var result = state.appointmentResult ? '<div class="wg-loading" style="color:#168a5b">Your appointment request was sent.</div>' : "";
     var errorHtml = state.appointmentFormError ? '<div class="wg-loading" style="color:#c24141">' + esc(state.appointmentFormError) + '</div>' : "";
     return '<div class="wg-panel"><h4>Book an appointment</h4>' +
-      '<input id="wgApptName" placeholder="Your name" />' +
-      '<input id="wgApptEmail" type="email" placeholder="Email" />' +
-      '<input id="wgApptPhone" placeholder="Phone" />' +
-      '<input id="wgApptWhen" type="datetime-local" />' +
+      '<input id="wgApptName" placeholder="Your name" required />' +
+      '<input id="wgApptEmail" type="email" placeholder="Email" required />' +
+      '<input id="wgApptPhone" type="tel" placeholder="Phone, e.g. (555) 123-4567" required />' +
+      '<input id="wgApptWhen" type="datetime-local" required />' +
       '<div class="wg-panel-actions">' +
       '<button class="wg-panel-btn primary" id="wgApptSubmit">Request</button>' +
       '<button class="wg-panel-btn ghost" id="wgPanelCancel">Cancel</button>' +
@@ -209,12 +254,13 @@
     if (leadSubmit) leadSubmit.addEventListener("click", function(){
       var name = document.getElementById("wgLeadName").value.trim();
       var email = document.getElementById("wgLeadEmail").value.trim();
-      var phone = document.getElementById("wgLeadPhone").value.trim();
-      if (!email && !phone) {
-        state.leadFormError = "Please enter an email or phone number so we can reach you.";
-        render();
-        return;
-      }
+      var phoneRaw = document.getElementById("wgLeadPhone").value.trim();
+      var phone = formatUsPhoneE164(phoneRaw);
+
+      if (!name) { state.leadFormError = "Please enter your name."; render(); return; }
+      if (!isValidEmail(email)) { state.leadFormError = "Please enter a valid email address."; render(); return; }
+      if (!phone) { state.leadFormError = "Please enter a valid US phone number, e.g. (555) 123-4567."; render(); return; }
+
       state.leadFormError = null;
       var parts = name.split(" ");
       var firstName = parts.shift() || "";
@@ -223,18 +269,22 @@
       api("/api/v1/public/leads", { method: "POST", body: {
         first_name: firstName || null,
         last_name: lastName || null,
-        email: email || null,
-        phone: phone || null
+        email: email,
+        phone: phone
       }})
         .then(function(){
           state.leadResult = true;
           render();
         })
         .catch(function(err){
-          state.messages.push({ who: "error", text: "Could not save your details: " + err.message });
-          state.activePanel = null;
+          // Kept in the panel (not pushed into the chat log, and the panel
+          // is no longer closed on failure) -- silently closing the panel
+          // on a rejected submission is exactly why a failed save looked
+          // indistinguishable from "nothing happened".
+          state.leadFormError = "Could not save your details: " + describeApiError(err);
           render();
-        });
+        })
+        .then(function(){ leadSubmit.disabled = false; leadSubmit.textContent = "Send"; });
     });
 
     var APPOINTMENT_DURATION_MINUTES = 30;
@@ -242,18 +292,15 @@
     if (apptSubmit) apptSubmit.addEventListener("click", function(){
       var name = document.getElementById("wgApptName").value.trim();
       var email = document.getElementById("wgApptEmail").value.trim();
-      var phone = document.getElementById("wgApptPhone").value.trim();
+      var phoneRaw = document.getElementById("wgApptPhone").value.trim();
+      var phone = formatUsPhoneE164(phoneRaw);
       var when = document.getElementById("wgApptWhen").value;
-      if (!when) {
-        state.appointmentFormError = "Please choose a date and time.";
-        render();
-        return;
-      }
-      if (!email && !phone) {
-        state.appointmentFormError = "Please enter an email or phone number so we can confirm your appointment.";
-        render();
-        return;
-      }
+
+      if (!name) { state.appointmentFormError = "Please enter your name."; render(); return; }
+      if (!isValidEmail(email)) { state.appointmentFormError = "Please enter a valid email address."; render(); return; }
+      if (!phone) { state.appointmentFormError = "Please enter a valid US phone number, e.g. (555) 123-4567."; render(); return; }
+      if (!isFutureDateTime(when)) { state.appointmentFormError = "Please choose a date and time in the future."; render(); return; }
+
       state.appointmentFormError = null;
       var parts = name.split(" ");
       var firstName = parts.shift() || "";
@@ -264,8 +311,8 @@
       api("/api/v1/public/appointments", { method: "POST", body: {
         first_name: firstName || null,
         last_name: lastName || null,
-        email: email || null,
-        phone: phone || null,
+        email: email,
+        phone: phone,
         start_at: startAt.toISOString(),
         end_at: endAt.toISOString(),
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || null
@@ -275,10 +322,10 @@
           render();
         })
         .catch(function(err){
-          state.messages.push({ who: "error", text: "Could not book that appointment: " + err.message });
-          state.activePanel = null;
+          state.appointmentFormError = "Could not book that appointment: " + describeApiError(err);
           render();
-        });
+        })
+        .then(function(){ apptSubmit.disabled = false; apptSubmit.textContent = "Request"; });
     });
   }
 
