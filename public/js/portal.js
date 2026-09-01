@@ -23,7 +23,10 @@
     demoDoc: null,
     demoPolling: false,
     demoChatLog: [],
-    demoLeadResult: null
+    demoLeadResult: null,
+    tenantDetail: null,
+    tenantDetailId: null,
+    pendingClientPassword: null
   };
 
   function esc(s){
@@ -33,6 +36,33 @@
   function fmtDate(d){
     if (!d) return "-";
     try { return new Date(d).toLocaleString(); } catch(e){ return d; }
+  }
+  function slugify(s){
+    return String(s || "").toLowerCase().trim()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .substring(0, 60);
+  }
+  function genPassword(){
+    var chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+    var out = "";
+    for (var i = 0; i < 12; i++) out += chars.charAt(Math.floor(Math.random() * chars.length));
+    return out;
+  }
+  function isValidEmail(s){
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s || "");
+  }
+  function usPhoneDigits(s){
+    var digits = String(s || "").replace(/\D/g, "");
+    if (digits.length === 11 && digits.charAt(0) === "1") digits = digits.substring(1);
+    return digits;
+  }
+  function isValidUsPhone(s){
+    return usPhoneDigits(s).length === 10;
+  }
+  function normalizeUsPhone(s){
+    var digits = usPhoneDigits(s);
+    return digits.length === 10 ? ("+1" + digits) : String(s || "").trim();
   }
 
   function api(path, opts){
@@ -156,6 +186,17 @@
     api("/api/v1/admin/tenants").then(function(d){ state.tenants = d; render(); }).catch(function(err){ showToast(err.message, true); });
   }
 
+  function openTenantDetail(id){
+    state.view = "tenantDetail";
+    state.tenantDetailId = id;
+    state.tenantDetail = null;
+    render();
+    api("/api/v1/admin/tenants/" + id).then(function(d){
+      state.tenantDetail = d;
+      render();
+    }).catch(function(err){ showToast(err.message, true); });
+  }
+
   function setView(v){
     state.view = v;
     if (v === "leads") { ensureLeads(function(){}); ensureContacts(function(){}); }
@@ -223,7 +264,8 @@
   function renderShell(){
     var items = navItems();
     var navHtml = items.map(function(it){
-      var cls = "eg-navitem" + (state.view === it.id ? " active" : "");
+      var isActive = state.view === it.id || (it.id === "tenants" && state.view === "tenantDetail");
+      var cls = "eg-navitem" + (isActive ? " active" : "");
       return '<div class="' + cls + '" data-nav="' + it.id + '">' + it.icon + ' ' + esc(it.label) + '</div>';
     }).join("");
 
@@ -269,6 +311,7 @@
     if (state.view === "knowledge") return "Knowledge Base";
     if (state.view === "assistant") return "AI Assistant";
     if (state.view === "tenants") return "Clients";
+    if (state.view === "tenantDetail") return state.tenantDetail ? (state.tenantDetail.name || state.tenantDetail.slug) : "Client details";
     if (state.view === "demo") return "Instant Demo";
     return "";
   }
@@ -278,6 +321,7 @@
     if (state.view === "knowledge") return "Documents powering your AI assistant's answers.";
     if (state.view === "assistant") return "Configure and test your AI assistant.";
     if (state.view === "tenants") return "Manage EdgifyNow client workspaces.";
+    if (state.view === "tenantDetail") return "Client account, billing and usage.";
     if (state.view === "demo") return "Upload a document and get a live AI answer, right now.";
     return "";
   }
@@ -290,6 +334,7 @@
     if (state.view === "knowledge") { el.innerHTML = knowledgeHtml(); bindKnowledge(); return; }
     if (state.view === "assistant") { el.innerHTML = assistantHtml(); bindAssistant(); return; }
     if (state.view === "tenants") { el.innerHTML = tenantsHtml(); bindTenants(); return; }
+    if (state.view === "tenantDetail") { el.innerHTML = tenantDetailHtml(); bindTenantDetail(); return; }
     if (state.view === "demo") { el.innerHTML = demoHtml(); bindDemo(); return; }
   }
 
@@ -319,25 +364,78 @@
       '</div>';
   }
 
+  // package / ai_usage_allowance / ai_usage_current_period / status are now
+  // real fields on GET /api/v1/admin/tenants (confirmed against the current
+  // openapi.json - this was placeholder demo data before the backend added
+  // these; there is still no updated_at field on this resource, so
+  // "Created" can't be swapped for a real last-updated time).
+  function statusPillForTenant(t){
+    var map = {
+      active: "green",
+      trial: "amber",
+      paused: "",
+      churned: "red"
+    };
+    var cls = "eg-pill" + (map[t.status] ? " " + map[t.status] : "");
+    var label = t.status ? (t.status.charAt(0).toUpperCase() + t.status.slice(1)) : (t.is_active ? "Active" : "Inactive");
+    return '<span class="' + cls + '">' + esc(label) + '</span>';
+  }
+
+  // There is no updated_at field on the tenant resource (checked
+  // openapi.json). This column is explicitly demo-only, requested for
+  // demo purposes - deterministic per tenant id (not random) so it stays
+  // stable across renders, and clearly labelled as demo data in both the
+  // column header and the disclosure note below the table so it can't be
+  // mistaken for something the API actually returns. Remove this function
+  // and column the moment a real updated_at field exists.
+  function demoLastUpdatedFor(tenant){
+    var id = tenant.id || tenant.slug || "";
+    var seed = 0;
+    for (var i = 0; i < id.length; i++) seed = (seed + id.charCodeAt(i) * (i + 1)) % 100000;
+    var created = tenant.created_at ? new Date(tenant.created_at).getTime() : Date.now();
+    var now = Date.now();
+    var span = Math.max(now - created, 0);
+    var offset = span * ((seed % 1000) / 1000);
+    return new Date(created + offset);
+  }
+
   function adminDashboardHtml(){
     var tenants = state.tenants || [];
     var rows = tenants.map(function(t){
-      return '<tr><td><b>' + esc(t.name) + '</b><div class="eg-small eg-muted">' + esc(t.slug) + '</div></td>' +
-        '<td>' + (t.is_active ? '<span class="eg-pill green">Active</span>' : '<span class="eg-pill red">Inactive</span>') + '</td>' +
-        '<td class="eg-small eg-muted">' + fmtDate(t.created_at) + '</td></tr>';
+      var allowance = t.ai_usage_allowance;
+      var used = t.ai_usage_current_period || 0;
+      var usageHtml;
+      if (allowance) {
+        var pct = Math.round((used / allowance) * 100);
+        usageHtml = used.toLocaleString() + ' / ' + allowance.toLocaleString() + '<div class="eg-small eg-muted">' + pct + '% used</div>';
+      } else {
+        usageHtml = used.toLocaleString() + '<div class="eg-small eg-muted">no allowance set</div>';
+      }
+      var demoUpdatedAt = demoLastUpdatedFor(t);
+      return '<tr class="eg-clickrow" data-tenant-id="' + esc(t.id) + '" style="cursor:pointer"><td><b>' + esc(t.name) + '</b><div class="eg-small eg-muted">' + esc(t.slug) + '</div></td>' +
+        '<td>' + statusPillForTenant(t) + '</td>' +
+        '<td>' + (t.package ? '<span class="eg-tag">' + esc(t.package) + '</span>' : '<span class="eg-small eg-muted">Not set</span>') + '</td>' +
+        '<td>' + usageHtml + '</td>' +
+        '<td>' + (allowance ? allowance.toLocaleString() + '/mo' : '<span class="eg-small eg-muted">&mdash;</span>') + '</td>' +
+        '<td class="eg-small eg-muted">' + fmtDate(t.created_at) + '</td>' +
+        '<td class="eg-small eg-muted">' + fmtDate(demoUpdatedAt) + '</td></tr>';
     }).join("");
     return '<div class="eg-grid4">' +
       '<div class="eg-card eg-metric"><div class="eg-label">Total clients</div><div class="eg-value">' + tenants.length + '</div></div>' +
       '<div class="eg-card eg-metric"><div class="eg-label">Active clients</div><div class="eg-value">' + tenants.filter(function(t){return t.is_active;}).length + '</div></div>' +
       '</div>' +
       '<div class="eg-card"><div class="eg-row"><h3>Client health</h3><button class="eg-btn" data-goto="tenants">Manage clients</button></div>' +
-      (rows ? '<table class="eg-table"><thead><tr><th>Client</th><th>Status</th><th>Created</th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div class="eg-empty">No clients yet.</div>') +
+      (rows ? '<table class="eg-table"><thead><tr><th>Client</th><th>Status</th><th>Package</th><th>Usage</th><th>Allowance</th><th>Created</th><th>Last Updated</th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div class="eg-empty">No clients yet.</div>') +
+      (rows ? '<div class="eg-small eg-muted" style="margin-top:10px">Client / Status / Package / Usage / Allowance / Created are live from GET /api/v1/admin/tenants. “Last Updated” is placeholder demo data only — there is no updated_at field on this resource yet.</div>' : "") +
       '</div>';
   }
 
   function bindDashboard(){
     document.querySelectorAll("[data-goto]").forEach(function(el){
       el.addEventListener("click", function(){ setView(el.getAttribute("data-goto")); });
+    });
+    document.querySelectorAll("[data-tenant-id]").forEach(function(row){
+      row.addEventListener("click", function(){ openTenantDetail(row.getAttribute("data-tenant-id")); });
     });
   }
 
@@ -627,55 +725,202 @@
   }
 
   // ---- Tenants (admin) ----
+  // Client / business name, slug and owner email/password map to the
+  // real POST /api/v1/admin/tenants fields (confirmed against the current
+  // openapi.json): contact_name, contact_phone, owner_email, owner_password
+  // and tenant_slug are required by the API; tenant_name, website and
+  // welcome_message are optional. Slug is auto-filled from the name (still
+  // editable) and the password is auto-generated (still editable/regenerable)
+  // since the product spec's required-field list only calls out contact
+  // name/email/phone - slug and a login password are things the API needs
+  // but that an admin shouldn't have to think up by hand.
   function tenantsHtml(){
+    if (!state.pendingClientPassword) state.pendingClientPassword = genPassword();
     var tenants = state.tenants;
     var listHtml = "";
     if (!tenants) listHtml = '<div class="eg-empty">Loading clients...</div>';
     else if (!tenants.length) listHtml = '<div class="eg-empty">No clients yet.</div>';
     else {
       var rows = tenants.map(function(t){
-        return '<tr><td><b>' + esc(t.name) + '</b></td><td>' + esc(t.slug) + '</td>' +
-          '<td>' + (t.is_active ? '<span class="eg-pill green">Active</span>' : '<span class="eg-pill red">Inactive</span>') + '</td>' +
+        var allowance = t.ai_usage_allowance;
+        var used = t.ai_usage_current_period || 0;
+        var usageHtml = allowance
+          ? used.toLocaleString() + ' / ' + allowance.toLocaleString()
+          : used.toLocaleString() + ' <span class="eg-small eg-muted">(no allowance)</span>';
+        return '<tr data-tenant-id="' + esc(t.id) + '" style="cursor:pointer">' +
+          '<td><b>' + esc(t.name) + '</b><div class="eg-small eg-muted">' + esc(t.slug) + '</div></td>' +
+          '<td>' + statusPillForTenant(t) + '</td>' +
+          '<td>' + (t.package ? '<span class="eg-tag">' + esc(t.package) + '</span>' : '<span class="eg-small eg-muted">Not set</span>') + '</td>' +
+          '<td>' + usageHtml + '</td>' +
           '<td class="eg-small eg-muted">' + fmtDate(t.created_at) + '</td></tr>';
       }).join("");
-      listHtml = '<table class="eg-table"><thead><tr><th>Name</th><th>Slug</th><th>Status</th><th>Created</th></tr></thead><tbody>' + rows + '</tbody></table>';
+      listHtml = '<table class="eg-table"><thead><tr><th>Name</th><th>Status</th><th>Package</th><th>Usage / Allowance</th><th>Created</th></tr></thead><tbody>' + rows + '</tbody></table>' +
+        '<div class="eg-small eg-muted" style="margin-top:10px">Click a row to view or edit full client details.</div>';
     }
 
     return '<div class="eg-grid2">' +
       '<div class="eg-card"><h3>All clients</h3>' + listHtml + '</div>' +
       '<div class="eg-card"><h3>Add new client</h3>' +
-      '<div class="eg-form-row"><label>Client / business name</label><input class="eg-input" id="egTenantName" /></div>' +
-      '<div class="eg-form-row"><label>Slug</label><input class="eg-input" id="egTenantSlug" placeholder="e.g. bright-path-tutoring" /></div>' +
-      '<div class="eg-form-row"><label>Owner email</label><input class="eg-input" type="email" id="egOwnerEmail" /></div>' +
-      '<div class="eg-form-row"><label>Owner password</label><input class="eg-input" type="password" id="egOwnerPassword" /></div>' +
-      '<div class="eg-form-row"><label>Welcome message (optional)</label><input class="eg-input" id="egWelcomeMsg" /></div>' +
+      '<div class="eg-form-row"><label>Contact name</label><input class="eg-input" id="egContactName" placeholder="Full name" /></div>' +
+      '<div class="eg-form-row"><label>Contact email</label><input class="eg-input" type="email" id="egOwnerEmail" placeholder="owner@business.com" /></div>' +
+      '<div class="eg-form-row"><label>Contact phone (US)</label><input class="eg-input" id="egContactPhone" placeholder="(555) 123-4567" /></div>' +
+      '<div class="eg-form-row"><label>Business name <span class="eg-small eg-muted">(optional)</span></label><input class="eg-input" id="egTenantName" /></div>' +
+      '<div class="eg-form-row"><label>Website <span class="eg-small eg-muted">(optional)</span></label><input class="eg-input" id="egWebsite" placeholder="https://example.com" /></div>' +
+      '<div class="eg-form-row"><label>Welcome message <span class="eg-small eg-muted">(optional)</span></label><input class="eg-input" id="egWelcomeMsg" /></div>' +
+      '<div class="eg-form-row"><label>Slug <span class="eg-small eg-muted">(auto-filled from the name above, edit if needed)</span></label><input class="eg-input" id="egTenantSlug" placeholder="e.g. bright-path-tutoring" /></div>' +
+      '<div class="eg-form-row"><label>Login password <span class="eg-small eg-muted">(auto-generated - copy this to share with the client)</span></label>' +
+      '<div style="display:flex;gap:8px"><input class="eg-input" id="egOwnerPassword" value="' + esc(state.pendingClientPassword) + '" />' +
+      '<button type="button" class="eg-btn ghost" id="egRegenPassword" style="white-space:nowrap">Regenerate</button></div></div>' +
       '<button class="eg-btn" id="egCreateTenant" style="width:100%">Create client</button>' +
       '</div></div>';
   }
 
   function bindTenants(){
+    document.querySelectorAll("[data-tenant-id]").forEach(function(row){
+      row.addEventListener("click", function(){ openTenantDetail(row.getAttribute("data-tenant-id")); });
+    });
+
+    var slugInput = document.getElementById("egTenantSlug");
+    var contactNameInput = document.getElementById("egContactName");
+    var bizNameInput = document.getElementById("egTenantName");
+    var slugTouched = false;
+    if (slugInput) slugInput.addEventListener("input", function(){ slugTouched = true; });
+    function autoSlug(){
+      if (slugTouched || !slugInput) return;
+      slugInput.value = slugify((bizNameInput ? bizNameInput.value : "") || (contactNameInput ? contactNameInput.value : ""));
+    }
+    if (contactNameInput) contactNameInput.addEventListener("input", autoSlug);
+    if (bizNameInput) bizNameInput.addEventListener("input", autoSlug);
+
+    var regenBtn = document.getElementById("egRegenPassword");
+    if (regenBtn) {
+      regenBtn.addEventListener("click", function(){
+        var pw = genPassword();
+        state.pendingClientPassword = pw;
+        var pwInput = document.getElementById("egOwnerPassword");
+        if (pwInput) pwInput.value = pw;
+      });
+    }
+
     var btn = document.getElementById("egCreateTenant");
     if (!btn) return;
     btn.addEventListener("click", function(){
+      var contactName = document.getElementById("egContactName").value.trim();
+      var email = document.getElementById("egOwnerEmail").value.trim();
+      var phoneRaw = document.getElementById("egContactPhone").value.trim();
+      var bizName = document.getElementById("egTenantName").value.trim();
+      var website = document.getElementById("egWebsite").value.trim();
+      var welcome = document.getElementById("egWelcomeMsg").value.trim();
+      var slug = document.getElementById("egTenantSlug").value.trim();
+      var password = document.getElementById("egOwnerPassword").value;
+
+      if (!contactName) { showToast("Contact name is required", true); return; }
+      if (!isValidEmail(email)) { showToast("Enter a valid contact email", true); return; }
+      if (!isValidUsPhone(phoneRaw)) { showToast("Enter a valid 10-digit US phone number", true); return; }
+      if (!slug) { showToast("Slug is required", true); return; }
+      if (!password) { showToast("Password is required", true); return; }
+
       var body = {
-        tenant_name: document.getElementById("egTenantName").value.trim(),
-        tenant_slug: document.getElementById("egTenantSlug").value.trim(),
-        owner_email: document.getElementById("egOwnerEmail").value.trim(),
-        owner_password: document.getElementById("egOwnerPassword").value,
-        welcome_message: document.getElementById("egWelcomeMsg").value.trim() || null
+        contact_name: contactName,
+        contact_phone: normalizeUsPhone(phoneRaw),
+        owner_email: email,
+        owner_password: password,
+        tenant_slug: slug,
+        tenant_name: bizName || null,
+        website: website || null,
+        welcome_message: welcome || null
       };
-      if (!body.tenant_name || !body.tenant_slug || !body.owner_email || !body.owner_password) {
-        showToast("Please fill in all required fields", true);
-        return;
-      }
+
       btn.disabled = true; btn.textContent = "Creating...";
       api("/api/v1/admin/tenants", { method: "POST", body: body })
         .then(function(){
           showToast("Client created");
+          state.pendingClientPassword = null;
           ensureTenants();
         })
         .catch(function(err){ showToast(err.message, true); })
         .then(function(){ btn.disabled = false; btn.textContent = "Create client"; });
+    });
+  }
+
+  // ---- Client details ----
+  // Editable fields (status, package, prices, allowance, internal notes) map
+  // to PATCH /api/v1/admin/tenants/{id}. ai_usage_current_period, whatsapp_*
+  // and voice_* are on the GET response but are NOT in the PATCH schema
+  // (confirmed against the current openapi.json) - the backend doesn't
+  // support editing WhatsApp/Voice AI settings yet, so those are shown
+  // read-only here rather than as broken/no-op controls.
+  function tenantDetailHtml(){
+    var t = state.tenantDetail;
+    if (!t) return '<div class="eg-empty">Loading client...</div>';
+
+    var statuses = ["trial", "active", "paused", "churned"];
+    var statusOptions = statuses.map(function(s){
+      return '<option value="' + s + '"' + (t.status === s ? ' selected' : '') + '>' + s.charAt(0).toUpperCase() + s.slice(1) + '</option>';
+    }).join("");
+
+    var used = t.ai_usage_current_period || 0;
+    var usageHtml = t.ai_usage_allowance
+      ? used.toLocaleString() + ' / ' + t.ai_usage_allowance.toLocaleString() + ' (' + Math.round((used / t.ai_usage_allowance) * 100) + '% used)'
+      : used.toLocaleString() + ' (no allowance set)';
+
+    var dash = '<span class="eg-small eg-muted">&mdash;</span>';
+
+    return '<button class="eg-btn ghost" id="egBackToTenants" style="margin-bottom:14px">&larr; Back to clients</button>' +
+      '<div class="eg-grid2">' +
+      '<div class="eg-card">' +
+      '<h3>Account</h3>' +
+      '<div class="eg-small eg-muted" style="margin-bottom:14px">' + esc(t.slug) + ' &middot; Created ' + fmtDate(t.created_at) + '</div>' +
+      '<div class="eg-form-row"><label>Status</label><select class="eg-select" id="egDetailStatus">' + statusOptions + '</select></div>' +
+      '<div class="eg-form-row"><label>Package</label><input class="eg-input" id="egDetailPackage" value="' + esc(t.package || "") + '" placeholder="e.g. Growth" /></div>' +
+      '<div class="eg-form-row"><label>Negotiated setup price (USD)</label><input class="eg-input" type="number" step="0.01" min="0" id="egDetailSetupPrice" value="' + (t.setup_price_usd === null || t.setup_price_usd === undefined ? "" : t.setup_price_usd) + '" /></div>' +
+      '<div class="eg-form-row"><label>Negotiated recurring price (USD/mo)</label><input class="eg-input" type="number" step="0.01" min="0" id="egDetailRecurringPrice" value="' + (t.recurring_price_usd === null || t.recurring_price_usd === undefined ? "" : t.recurring_price_usd) + '" /></div>' +
+      '<div class="eg-form-row"><label>Package allowance limit <span class="eg-small eg-muted">(AI interactions / mo)</span></label><input class="eg-input" type="number" step="1" min="0" id="egDetailAllowance" value="' + (t.ai_usage_allowance === null || t.ai_usage_allowance === undefined ? "" : t.ai_usage_allowance) + '" /></div>' +
+      '<div class="eg-form-row"><label>Internal comments</label><textarea class="eg-textarea" id="egDetailNotes">' + esc(t.internal_notes || "") + '</textarea></div>' +
+      '<button class="eg-btn" id="egSaveTenantDetail">Save changes</button>' +
+      '</div>' +
+      '<div class="eg-card">' +
+      '<h3>Usage &amp; channels</h3>' +
+      '<div class="eg-form-row"><label>AI interaction usage (this period)</label><div class="eg-input" style="background:#f7f9fc">' + usageHtml + '</div></div>' +
+      '<div class="eg-form-row"><label>WhatsApp</label><div class="eg-input" style="background:#f7f9fc">' + (t.whatsapp_enabled ? 'Enabled &middot; ' + (t.whatsapp_number ? esc(t.whatsapp_number) : 'no number set') : 'Disabled') + '</div></div>' +
+      '<div class="eg-form-row"><label>Voice AI</label><div class="eg-input" style="background:#f7f9fc">' + (t.voice_enabled ? 'Enabled &middot; ' + (t.voice_number ? esc(t.voice_number) : 'no number set') : 'Disabled') + '</div></div>' +
+      '<div class="eg-small eg-muted">Usage, WhatsApp and Voice AI are read-only here &mdash; PATCH /api/v1/admin/tenants/{id} does not currently accept whatsapp_enabled, whatsapp_number, voice_enabled or voice_number, so there is no way to save changes to them yet. Flagged separately to the backend team.</div>' +
+      '<h3 style="margin-top:18px">Contact</h3>' +
+      '<div class="eg-form-row"><label>Contact name</label><div class="eg-input" style="background:#f7f9fc">' + (t.contact_name ? esc(t.contact_name) : dash) + '</div></div>' +
+      '<div class="eg-form-row"><label>Contact phone</label><div class="eg-input" style="background:#f7f9fc">' + (t.contact_phone ? esc(t.contact_phone) : dash) + '</div></div>' +
+      '<div class="eg-form-row"><label>Website</label><div class="eg-input" style="background:#f7f9fc">' + (t.website ? ('<a href="' + esc(t.website) + '" target="_blank" rel="noopener">' + esc(t.website) + '</a>') : dash) + '</div></div>' +
+      '</div>' +
+      '</div>';
+  }
+
+  function bindTenantDetail(){
+    var backBtn = document.getElementById("egBackToTenants");
+    if (backBtn) backBtn.addEventListener("click", function(){ state.view = "tenants"; render(); });
+
+    var saveBtn = document.getElementById("egSaveTenantDetail");
+    if (!saveBtn) return;
+    saveBtn.addEventListener("click", function(){
+      var setupRaw = document.getElementById("egDetailSetupPrice").value.trim();
+      var recurringRaw = document.getElementById("egDetailRecurringPrice").value.trim();
+      var allowanceRaw = document.getElementById("egDetailAllowance").value.trim();
+      var body = {
+        status: document.getElementById("egDetailStatus").value,
+        package: document.getElementById("egDetailPackage").value.trim() || null,
+        internal_notes: document.getElementById("egDetailNotes").value.trim() || null,
+        setup_price_usd: setupRaw === "" ? null : parseFloat(setupRaw),
+        recurring_price_usd: recurringRaw === "" ? null : parseFloat(recurringRaw),
+        ai_usage_allowance: allowanceRaw === "" ? null : parseInt(allowanceRaw, 10)
+      };
+      saveBtn.disabled = true; saveBtn.textContent = "Saving...";
+      api("/api/v1/admin/tenants/" + state.tenantDetailId, { method: "PATCH", body: body })
+        .then(function(updated){
+          state.tenantDetail = updated;
+          if (state.tenants) state.tenants = state.tenants.map(function(x){ return x.id === updated.id ? updated : x; });
+          showToast("Client updated");
+          render();
+        })
+        .catch(function(err){ showToast(err.message, true); })
+        .then(function(){ saveBtn.disabled = false; saveBtn.textContent = "Save changes"; });
     });
   }
 
