@@ -26,6 +26,7 @@
     demoLeadResult: null,
     tenantDetail: null,
     tenantDetailId: null,
+    tenantUsageSummary: null,
     pendingClientPassword: null
   };
 
@@ -190,11 +191,22 @@
     state.view = "tenantDetail";
     state.tenantDetailId = id;
     state.tenantDetail = null;
+    state.tenantUsageSummary = null;
     render();
     api("/api/v1/admin/tenants/" + id).then(function(d){
       state.tenantDetail = d;
       render();
     }).catch(function(err){ showToast(err.message, true); });
+    // Per-channel AI-interaction/lead breakdown - see channelSummaryHtml()
+    // below. This endpoint doesn't exist on the backend yet (checked
+    // openapi.json - only GET/PATCH /api/v1/admin/tenants/{id} exist), so a
+    // 404 here is expected today, not an error worth a toast. Fetched
+    // optimistically so the table starts showing real numbers the moment
+    // the backend adds it, with no further frontend change.
+    api("/api/v1/admin/tenants/" + id + "/usage-summary").then(function(d){
+      state.tenantUsageSummary = d;
+      render();
+    }).catch(function(){ state.tenantUsageSummary = null; });
   }
 
   function setView(v){
@@ -890,6 +902,69 @@
       '<div class="eg-form-row"><label>Contact phone</label><div class="eg-input" style="background:#f7f9fc">' + (t.contact_phone ? esc(t.contact_phone) : dash) + '</div></div>' +
       '<div class="eg-form-row"><label>Website</label><div class="eg-input" style="background:#f7f9fc">' + (t.website ? ('<a href="' + esc(t.website) + '" target="_blank" rel="noopener">' + esc(t.website) + '</a>') : dash) + '</div></div>' +
       '</div>' +
+      '</div>' +
+      channelSummaryHtml(t);
+  }
+
+  // High-level per-channel usage/leads summary. There is no backend
+  // endpoint for this breakdown today (only GET/PATCH
+  // /api/v1/admin/tenants/{id} exist - checked openapi.json), and it
+  // shouldn't be computed here anyway: per-channel counts need to be
+  // aggregated from raw usage/lead rows the admin API doesn't expose to
+  // this page, and doing that client-side would mean silently guessing.
+  // openTenantDetail() optimistically calls GET
+  // /api/v1/admin/tenants/{id}/usage-summary; state.tenantUsageSummary
+  // stays null until that endpoint exists, and this renders honest
+  // placeholders until then. Total AI Interactions/Allowance is real
+  // either way (it's already on the tenant resource).
+  function channelSummaryHtml(t){
+    var s = state.tenantUsageSummary;
+    var dash = '<span class="eg-small eg-muted">&mdash;</span>';
+    function cell(v){ return (v === null || v === undefined) ? dash : Number(v).toLocaleString(); }
+
+    var rows, totalLeads, totalAi, totalAllowance;
+    if (s) {
+      var c = s.channels || {};
+      rows = [
+        ['Website Assistant', cell(c.website && c.website.ai_interactions), cell(c.website && c.website.leads)],
+        ['WhatsApp', cell(c.whatsapp && c.whatsapp.ai_interactions), cell(c.whatsapp && c.whatsapp.leads)],
+        ['Voice AI', cell(c.voice && c.voice.ai_interactions), cell(c.voice && c.voice.leads)],
+        ['Web / Contact Forms', dash, cell(c.web_form && c.web_form.leads)]
+      ];
+      totalLeads = ["website", "whatsapp", "voice", "web_form"].reduce(function(sum, k){
+        return sum + ((c[k] && c[k].leads) || 0);
+      }, 0);
+      totalAi = s.ai_usage_total !== null && s.ai_usage_total !== undefined ? s.ai_usage_total : (t.ai_usage_current_period || 0);
+      totalAllowance = s.ai_usage_allowance !== null && s.ai_usage_allowance !== undefined ? s.ai_usage_allowance : t.ai_usage_allowance;
+    } else {
+      rows = [
+        ['Website Assistant', dash, dash],
+        ['WhatsApp', dash, dash],
+        ['Voice AI', dash, dash],
+        ['Web / Contact Forms', dash, dash]
+      ];
+      totalLeads = null;
+      totalAi = t.ai_usage_current_period || 0;
+      totalAllowance = t.ai_usage_allowance;
+    }
+    var totalAiHtml = totalAllowance ? totalAi.toLocaleString() + ' / ' + totalAllowance.toLocaleString() : totalAi.toLocaleString();
+    var totalLeadsHtml = cell(totalLeads);
+
+    var rowsHtml = rows.map(function(r){
+      return '<tr><td>' + r[0] + '</td><td>' + r[1] + '</td><td>' + r[2] + '</td></tr>';
+    }).join("");
+
+    var noteHtml = s
+      ? '<div class="eg-small eg-muted" style="margin-top:10px">Per-channel breakdown from GET /api/v1/admin/tenants/{id}/usage-summary.</div>'
+      : '<div class="eg-small eg-muted" style="margin-top:10px">Per-channel AI interactions and leads captured need a backend usage-summary endpoint that doesn\'t exist yet, so those cells show &mdash; rather than a guess. Total AI Interactions / Allowance above is real (from the tenant record). This table will populate automatically once the backend adds GET /api/v1/admin/tenants/{id}/usage-summary.</div>';
+
+    return '<div class="eg-card" style="margin-top:16px">' +
+      '<h3>Channel summary</h3>' +
+      '<table class="eg-table"><thead><tr><th>Channel</th><th>AI Interactions</th><th>Leads Captured</th></tr></thead><tbody>' +
+      rowsHtml +
+      '<tr><td><b>Total</b></td><td><b>' + totalAiHtml + '</b></td><td><b>' + totalLeadsHtml + '</b></td></tr>' +
+      '</tbody></table>' +
+      noteHtml +
       '</div>';
   }
 
