@@ -264,12 +264,16 @@
         { id: "demo", label: "Instant Demo", icon: "⚡" }
       ];
     }
+    // Instant Demo is intentionally admin-only (tracker item #14: "only
+    // Admin account should have it") - a client demonstrating their own
+    // assistant already has the real thing (AI Assistant tab); Instant Demo
+    // exists so an EdgifyNow admin can show a prospect a live result without
+    // that prospect needing their own account yet.
     return [
       { id: "dashboard", label: "Dashboard", icon: "◉" },
       { id: "leads", label: "Leads & Contacts", icon: "◫" },
       { id: "knowledge", label: "Knowledge", icon: "▤" },
-      { id: "assistant", label: "AI Assistant", icon: "◎" },
-      { id: "demo", label: "Instant Demo", icon: "⚡" }
+      { id: "assistant", label: "AI Assistant", icon: "◎" }
     ];
   }
 
