@@ -71,17 +71,32 @@ This app is always deployed behind a TLS-terminating reverse proxy (see `Dockerf
 Once deployed, give each client this snippet (swap in their tenant's own widget key):
 
 ```html
-<iframe
-  src="https://app-dev.edgifynow.com/widget?key=TENANT_WIDGET_KEY"
-  title="Business Assistant"
-  width="400"
-  height="600"
-  style="border:0; position:fixed; right:20px; bottom:20px; z-index:9999;"
-  allow="clipboard-write">
-</iframe>
+<script>
+(function(){
+  var WIDGET_URL = "https://app-dev.edgifynow.com/widget?key=TENANT_WIDGET_KEY";
+  var BUBBLE = "70px", PANEL_W = "400px", PANEL_H = "600px";
+  var f = document.createElement("iframe");
+  f.src = WIDGET_URL;
+  f.title = "Business Assistant";
+  f.allow = "clipboard-write";
+  f.style.cssText = "border:0!important;position:fixed!important;right:20px!important;bottom:20px!important;" +
+    "width:" + BUBBLE + "!important;height:" + BUBBLE + "!important;" +
+    "max-width:calc(100vw - 40px)!important;max-height:calc(100vh - 40px)!important;" +
+    "z-index:2147483647!important;background:transparent!important;border-radius:16px!important;" +
+    "transition:width .15s ease,height .15s ease;";
+  document.body.appendChild(f);
+  window.addEventListener("message", function(e){
+    if (!e.data || e.data.source !== "edgifynow-widget") return;
+    f.style.width = e.data.open ? PANEL_W : BUBBLE;
+    f.style.height = e.data.open ? PANEL_H : BUBBLE;
+  });
+})();
+</script>
 ```
 
-Replace `app-dev.edgifynow.com` with `app.edgifynow.com` for a production client. **The widget key is the only thing that changes per client/tenant** — the iframe `src` and the rest of the snippet stay identical.
+Replace `app-dev.edgifynow.com` with `app.edgifynow.com` for a production client. **The widget key is the only thing that changes per client/tenant** — the rest of the snippet stays identical.
+
+This is a small loader script, not a plain static `<iframe>` tag, and that's deliberate: an iframe intercepts clicks over its *entire box* no matter what's drawn inside it, so a statically-sized 400x600 iframe would block clicks to the host page underneath it (menus, buttons, etc.) even while the widget shows nothing but its small collapsed bubble. The script starts the iframe at bubble size and listens for a `postMessage` the widget sends on every open/close (see `notifyHostSize()` in `public/js/widget.js`), resizing the real iframe element only while the panel is actually open. **A plain static `<iframe>` tag still works and shows the widget correctly, but keeps this click-blocking problem** — always use the script snippet above for a real embed.
 
 The widget key is read client-side from the URL and sent only as the `X-API-Key` header on requests to `/api/v1/public/*`. This app never renders it into the page and never writes it to `console.log`. It's important to be precise about what that does and doesn't guarantee, though: because it's a query-string value (`?key=...`), it **can** still appear in browser history, the referrer header of outbound requests, and web server access logs on any server it passes through — that's inherent to putting any value in a URL, not something client-side code can prevent. Treat it the same way you'd treat any embeddable-widget public key (Stripe's publishable key, Intercom's app ID, etc.): safe to expose in a browser, tenant-scoped, and rotatable, but not something to also paste into chat, tickets, or commits unnecessarily. No tenant ID, JWT, admin credential, or backend secret is ever present in the browser for this page — that guarantee does hold.
 

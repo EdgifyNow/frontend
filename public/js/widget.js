@@ -127,11 +127,25 @@
   }
 
   // Collapsed by default: just the round launcher bubble, matching the old
-  // sticky chat icon's behaviour (click to open, click to close). The
-  // iframe embedding this page stays a fixed size the whole time (see the
-  // #wgRoot comment in widget.blade.php) - only the bubble or the open
-  // window is ever drawn, so the rest of that space is invisible and never
-  // blocks clicks on the host page behind it.
+  // sticky chat icon's behaviour (click to open, click to close).
+  //
+  // IMPORTANT: an <iframe> element intercepts clicks over its whole box
+  // regardless of what's drawn inside it - a transparent area is still not
+  // click-through. So a host page that embeds this at a fixed large size
+  // (e.g. 400x600) would have that entire rectangle block clicks to
+  // whatever's underneath it (menus, buttons, etc.) even while collapsed to
+  // just the bubble. notifyHostSize() below posts the open/closed state to
+  // the parent window so the EMBED SNIPPET itself can shrink the actual
+  // <iframe> element to a small bubble-sized box when collapsed and grow it
+  // back only while open - see README "Embedding the widget" for the
+  // required parent-side listener. Embeds that don't run that listener
+  // still work, but keep the click-blocking problem.
+  function notifyHostSize(){
+    try {
+      window.parent.postMessage({ source: "edgifynow-widget", open: state.open }, "*");
+    } catch (e) { /* no parent window (e.g. viewed directly) - fine to ignore */ }
+  }
+
   function render(){
     if (!state.open) {
       root.innerHTML = '<button class="wg-launcher" id="wgLauncher" aria-label="Open chat"><svg viewBox="0 0 24 24" width="26" height="26" fill="#fff"><path d="M4 4h16a1 1 0 011 1v11a1 1 0 01-1 1H9l-5 4v-4H4a1 1 0 01-1-1V5a1 1 0 011-1z"/></svg></button>';
@@ -235,12 +249,14 @@
     if (launcher) launcher.addEventListener("click", function(){
       state.open = true;
       render();
+      notifyHostSize();
     });
 
     var closeBtn = document.getElementById("wgClose");
     if (closeBtn) closeBtn.addEventListener("click", function(){
       state.open = false;
       render();
+      notifyHostSize();
     });
 
     var restart = document.getElementById("wgRestart");
@@ -386,5 +402,6 @@
   }
 
   render();
+  notifyHostSize();
   if (!state.keyMissing) loadBranding();
 })();
