@@ -16,7 +16,16 @@
 }
 *{box-sizing:border-box}
 html,body{margin:0;height:100%;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:transparent}
-#wgRoot{display:flex;flex-direction:column;height:100vh;background:var(--wg-bg);border-radius:14px;overflow:hidden;box-shadow:0 10px 40px rgba(0,0,0,.18)}
+/* #wgRoot fills the whole embed iframe (e.g. 400x600) at all times so the
+   iframe never needs to resize itself - but only the launcher bubble or the
+   open window (both sized/positioned below) are ever visually opaque, so
+   the rest of that space stays invisible and doesn't cover the host page. */
+#wgRoot{position:relative;height:100%;width:100%}
+.wg-launcher{position:fixed;bottom:0;right:0;width:60px;height:60px;border-radius:50%;background:var(--wg-primary);border:0;color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 8px 24px rgba(0,0,0,.25)}
+.wg-window{position:absolute;inset:0;display:flex;flex-direction:column;background:var(--wg-bg);border-radius:14px;overflow:hidden;box-shadow:0 10px 40px rgba(0,0,0,.18)}
+.wg-mini-head{display:flex;justify-content:flex-end;padding:6px;flex:0 0 auto}
+.wg-close{background:transparent;border:0;color:inherit;font-size:20px;line-height:1;cursor:pointer;padding:2px 9px;border-radius:6px}
+.wg-close:hover{background:rgba(0,0,0,.08)}
 .wg-head{background:var(--wg-primary);color:#fff;padding:14px 16px;display:flex;align-items:center;gap:10px;flex:0 0 auto}
 .wg-head img{width:28px;height:28px;border-radius:6px;object-fit:cover;background:rgba(255,255,255,.2)}
 .wg-head-name{font-weight:700;font-size:14px}
@@ -44,7 +53,7 @@ html,body{margin:0;height:100%;font-family:Inter,ui-sans-serif,system-ui,-apple-
 .wg-panel-btn.primary{background:var(--wg-primary);color:#fff}
 .wg-panel-btn.ghost{background:var(--wg-bg);color:var(--wg-ink)}
 .wg-error-banner{background:#feecec;color:var(--wg-red);padding:10px 14px;font-size:12.5px}
-.wg-boot{display:flex;align-items:center;justify-content:center;height:100%;color:var(--wg-muted);font-size:13px}
+.wg-boot{display:flex;align-items:center;justify-content:center;flex:1;color:var(--wg-muted);font-size:13px}
 </style>
 </head>
 <body>

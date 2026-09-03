@@ -14,6 +14,7 @@
   var WIDGET_KEY = new URLSearchParams(location.search).get("key") || "";
 
   var state = {
+    open: false,
     booting: true,
     keyMissing: !WIDGET_KEY,
     branding: null,
@@ -125,17 +126,34 @@
       });
   }
 
+  // Collapsed by default: just the round launcher bubble, matching the old
+  // sticky chat icon's behaviour (click to open, click to close). The
+  // iframe embedding this page stays a fixed size the whole time (see the
+  // #wgRoot comment in widget.blade.php) - only the bubble or the open
+  // window is ever drawn, so the rest of that space is invisible and never
+  // blocks clicks on the host page behind it.
   function render(){
+    if (!state.open) {
+      root.innerHTML = '<button class="wg-launcher" id="wgLauncher" aria-label="Open chat"><svg viewBox="0 0 24 24" width="26" height="26" fill="#fff"><path d="M4 4h16a1 1 0 011 1v11a1 1 0 01-1 1H9l-5 4v-4H4a1 1 0 01-1-1V5a1 1 0 011-1z"/></svg></button>';
+      bind();
+      return;
+    }
+
+    var closeBtnHtml = '<button class="wg-close" id="wgClose" aria-label="Close chat">&times;</button>';
+
     if (state.keyMissing) {
-      root.innerHTML = '<div class="wg-boot">No widget key provided in the URL (expected ?key=...).</div>';
+      root.innerHTML = '<div class="wg-window"><div class="wg-mini-head">' + closeBtnHtml + '</div><div class="wg-boot">No widget key provided in the URL (expected ?key=...).</div></div>';
+      bind();
       return;
     }
     if (state.booting) {
-      root.innerHTML = '<div class="wg-boot"><span class="wg-spin"></span></div>';
+      root.innerHTML = '<div class="wg-window"><div class="wg-mini-head">' + closeBtnHtml + '</div><div class="wg-boot"><span class="wg-spin"></span></div></div>';
+      bind();
       return;
     }
     if (state.brandingError) {
-      root.innerHTML = '<div class="wg-error-banner">Could not load this assistant: ' + esc(state.brandingError) + '</div>';
+      root.innerHTML = '<div class="wg-window"><div class="wg-mini-head">' + closeBtnHtml + '</div><div class="wg-error-banner">Could not load this assistant: ' + esc(state.brandingError) + '</div></div>';
+      bind();
       return;
     }
 
@@ -161,10 +179,12 @@
     }
 
     root.innerHTML =
+      '<div class="wg-window">' +
       '<div class="wg-head">' +
       logoHtml +
       '<div><div class="wg-head-name">' + esc(b.name || "Business Assistant") + '</div><div class="wg-head-sub">Usually replies instantly</div></div>' +
       '<button class="wg-restart" id="wgRestart" title="Restart conversation">Restart</button>' +
+      closeBtnHtml +
       '</div>' +
       '<div class="wg-body" id="wgBody">' + msgsHtml + loadingHtml + '</div>' +
       '<div class="wg-actions">' +
@@ -175,7 +195,8 @@
       '<div class="wg-foot"><form class="wg-form" id="wgChatForm">' +
       '<input class="wg-input" id="wgChatInput" placeholder="Type your question..." autocomplete="off" />' +
       '<button class="wg-send" type="submit" aria-label="Send"><svg width="16" height="16" viewBox="0 0 24 24" fill="#fff"><path d="M2 21l21-9L2 3v7l15 2-15 2v7z"/></svg></button>' +
-      '</form></div>';
+      '</form></div>' +
+      '</div>';
 
     bind();
     var body = document.getElementById("wgBody");
@@ -210,6 +231,18 @@
   }
 
   function bind(){
+    var launcher = document.getElementById("wgLauncher");
+    if (launcher) launcher.addEventListener("click", function(){
+      state.open = true;
+      render();
+    });
+
+    var closeBtn = document.getElementById("wgClose");
+    if (closeBtn) closeBtn.addEventListener("click", function(){
+      state.open = false;
+      render();
+    });
+
     var restart = document.getElementById("wgRestart");
     if (restart) restart.addEventListener("click", function(){
       state.messages = [];
