@@ -27,7 +27,13 @@
     tenantDetail: null,
     tenantDetailId: null,
     tenantUsageSummary: null,
-    pendingClientPassword: null
+    pendingClientPassword: null,
+    leadDrawerId: null,
+    leadSearch: "",
+    leadDateFilter: "all",
+    leadStatusFilter: "all",
+    leadSourceFilter: "all",
+    contactSearch: ""
   };
 
   function esc(s){
@@ -37,6 +43,70 @@
   function fmtDate(d){
     if (!d) return "-";
     try { return new Date(d).toLocaleString(); } catch(e){ return d; }
+  }
+  function fmtTime(d){
+    if (!d) return "-";
+    try { return new Date(d).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }); } catch(e){ return d; }
+  }
+  function contactName(c){
+    if (!c) return "Unknown contact";
+    var name = ((c.first_name || "") + " " + (c.last_name || "")).trim();
+    return name || "Unknown contact";
+  }
+  function sourceLabel(s){
+    var map = { website_form: "Website form", website_chat: "Website chat", whatsapp: "WhatsApp", voice: "Voice", manual: "Manual" };
+    return map[s] || s;
+  }
+  function contactMapFromState(){
+    var map = {};
+    (state.contacts || []).forEach(function(c){ map[c.id] = c; });
+    return map;
+  }
+  function joinedLeads(){
+    var cmap = contactMapFromState();
+    return (state.leads || []).map(function(l){
+      var copy = {};
+      for (var k in l) copy[k] = l[k];
+      copy.contact = cmap[l.contact_id] || null;
+      return copy;
+    });
+  }
+  function selOpts(options, current){
+    return options.map(function(o){
+      var val = typeof o === "string" ? o : o.value;
+      var label = typeof o === "string" ? o : o.label;
+      return '<option value="' + esc(val) + '"' + (val === current ? " selected" : "") + '>' + esc(label) + '</option>';
+    }).join("");
+  }
+  // Re-render (render()) always replaces #egApp's innerHTML wholesale, which
+  // would drop focus/cursor position out of a live-filtered search box on
+  // every keystroke. This restores focus (by element id) and cursor
+  // position after such a re-render, so typing into a search input feels
+  // normal instead of losing focus after each character.
+  function preserveFocus(fn){
+    var active = document.activeElement;
+    var id = active && active.id;
+    var selStart = active && typeof active.selectionStart === "number" ? active.selectionStart : null;
+    fn();
+    if (id) {
+      var el = document.getElementById(id);
+      if (el) {
+        el.focus();
+        if (selStart !== null && el.setSelectionRange) el.setSelectionRange(selStart, selStart);
+      }
+    }
+  }
+  function csvEscape(v){
+    return '"' + String(v === null || v === undefined ? "" : v).replace(/"/g, '""') + '"';
+  }
+  function downloadCsv(filename, header, rows){
+    var lines = [header.map(csvEscape).join(",")];
+    rows.forEach(function(r){ lines.push(r.map(csvEscape).join(",")); });
+    var blob = new Blob([lines.join("\n")], { type: "text/csv" });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url; a.download = filename; a.click();
+    URL.revokeObjectURL(url);
   }
   function slugify(s){
     return String(s || "").toLowerCase().trim()
@@ -160,6 +230,7 @@
       api("/api/v1/admin/tenants").then(function(d){ state.tenants = d; render(); }).catch(function(){});
     } else {
       api("/api/v1/crm/leads").then(function(d){ state.leads = d; render(); }).catch(function(){});
+      api("/api/v1/crm/contacts").then(function(d){ state.contacts = d; render(); }).catch(function(){});
       api("/api/v1/documents").then(function(d){ state.documents = d; render(); }).catch(function(){});
       api("/api/v1/assistants").then(function(d){ state.assistants = d; render(); }).catch(function(){});
     }
@@ -306,7 +377,7 @@
       '</div>' +
       '<div id="egContent"></div>' +
       '</main>' +
-      '</div>' + toastHtml;
+      '</div>' + toastHtml + leadDrawerHtml();
 
     document.querySelectorAll("[data-nav]").forEach(function(el){
       el.addEventListener("click", function(){
@@ -315,6 +386,7 @@
         setView(v);
       });
     });
+    bindDrawer();
 
     renderContent();
   }
@@ -353,36 +425,74 @@
   }
 
   // ---- Dashboard ----
+  // "CRM daily view" per the client dashboard mockup: raw lead visibility,
+  // no scoring/workflow logic. Built entirely from GET /api/v1/crm/leads +
+  // GET /api/v1/crm/contacts (joined client-side on contact_id) - both
+  // already fetched by loadDashboardData(). Date/status filtering and
+  // sorting happen here in the frontend, same as the mockup's api-note said.
   function clientDashboardHtml(){
-    var leadsCount = state.leads ? state.leads.length : "-";
-    var docsCount = state.documents ? state.documents.length : "-";
-    var indexed = state.documents ? state.documents.filter(function(d){return d.status==="indexed";}).length : 0;
-    var assistantsCount = state.assistants ? state.assistants.length : "-";
-    var activeAssistant = state.assistants ? state.assistants.filter(function(a){return a.is_active;}).length : 0;
+    if (!state.leads || !state.contacts) {
+      return '<div class="eg-hero"><h2>CRM daily view</h2><p>Simple raw lead visibility - no overdue scoring, no extra workflow logic.</p></div>' +
+        '<div class="eg-card"><div class="eg-empty">Loading...</div></div>';
+    }
 
-    var recentLeads = (state.leads || []).slice(0,5).map(function(l){
-      return '<tr><td><b>' + esc(l.title || "Untitled") + '</b><div class="eg-small eg-muted">' + esc(l.service_interest || "") + '</div></td>' +
-        '<td><span class="eg-tag">' + esc(l.source) + '</span></td>' +
-        '<td>' + statusPill(l.status) + '</td></tr>';
+    var rows = joinedLeads();
+    var now = new Date();
+    var monthCount = rows.filter(function(r){
+      var d = new Date(r.created_at);
+      return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+    }).length;
+    var newCount = rows.filter(function(r){ return r.status === "new"; }).length;
+    var qualifiedCount = rows.filter(function(r){ return r.status === "qualified"; }).length;
+    var wonCount = rows.filter(function(r){ return r.status === "won"; }).length;
+
+    var todayKey = now.getFullYear() + "-" + String(now.getMonth() + 1).padStart(2, "0") + "-" + String(now.getDate()).padStart(2, "0");
+    var todayRows = rows.filter(function(r){ return (r.created_at || "").slice(0, 10) === todayKey; })
+      .sort(function(a, b){ return new Date(b.created_at) - new Date(a.created_at); });
+    var todayHtml = todayRows.map(function(r){
+      return '<tr class="eg-clickrow" style="cursor:pointer" data-lead-drawer="' + esc(r.id) + '">' +
+        '<td><b>' + esc(contactName(r.contact)) + '</b></td>' +
+        '<td>' + esc(r.service_interest || r.title || "-") + '</td>' +
+        '<td><span class="eg-tag">' + esc(sourceLabel(r.source)) + '</span></td>' +
+        '<td>' + fmtTime(r.created_at) + '</td>' +
+        '<td>' + statusPill(r.status) + '</td></tr>';
     }).join("");
 
-    return '<div class="eg-hero"><div class="eg-row"><div><h2>Your AI Assistant workspace</h2><p>Website chat, contact form and CRM data flow into this dashboard.</p></div></div></div>' +
+    var weekStart = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    var openStatuses = ["new", "contacted", "qualified", "booked"];
+    var weekRows = rows.filter(function(r){
+      if (openStatuses.indexOf(r.status) === -1) return false;
+      var activity = new Date(r.last_activity_at || r.created_at);
+      return activity >= weekStart;
+    }).sort(function(a, b){
+      return new Date(b.last_activity_at || b.created_at) - new Date(a.last_activity_at || a.created_at);
+    });
+    var weekHtml = weekRows.map(function(r){
+      return '<tr class="eg-clickrow" style="cursor:pointer" data-lead-drawer="' + esc(r.id) + '">' +
+        '<td><b>' + esc(contactName(r.contact)) + '</b></td>' +
+        '<td>' + esc(r.service_interest || r.title || "-") + '</td>' +
+        '<td><span class="eg-tag">' + esc(sourceLabel(r.source)) + '</span></td>' +
+        '<td>' + statusPill(r.status) + '</td>' +
+        '<td class="eg-small eg-muted">' + fmtDate(r.last_activity_at || r.created_at) + '</td></tr>';
+    }).join("");
+
+    return '<div class="eg-hero"><h2>CRM daily view</h2><p>Simple raw lead visibility - no overdue scoring, no extra workflow logic.</p></div>' +
       '<div class="eg-grid4">' +
-      '<div class="eg-card eg-metric"><div class="eg-label">Leads</div><div class="eg-value">' + leadsCount + '</div></div>' +
-      '<div class="eg-card eg-metric"><div class="eg-label">Knowledge documents</div><div class="eg-value">' + docsCount + '</div></div>' +
-      '<div class="eg-card eg-metric"><div class="eg-label">Documents indexed</div><div class="eg-value">' + indexed + '</div></div>' +
-      '<div class="eg-card eg-metric"><div class="eg-label">Active assistants</div><div class="eg-value">' + activeAssistant + ' / ' + assistantsCount + '</div></div>' +
+      '<div class="eg-card eg-metric"><div class="eg-label">Leads This Month</div><div class="eg-value">' + monthCount + '</div></div>' +
+      '<div class="eg-card eg-metric"><div class="eg-label">New</div><div class="eg-value">' + newCount + '</div></div>' +
+      '<div class="eg-card eg-metric"><div class="eg-label">Qualified</div><div class="eg-value">' + qualifiedCount + '</div></div>' +
+      '<div class="eg-card eg-metric"><div class="eg-label">Won</div><div class="eg-value">' + wonCount + '</div></div>' +
       '</div>' +
-      '<div class="eg-card"><div class="eg-row"><h3>Recent leads</h3><button class="eg-btn secondary" data-goto="leads">View all</button></div>' +
-      (recentLeads ? '<table class="eg-table"><thead><tr><th>Lead</th><th>Source</th><th>Status</th></tr></thead><tbody>' + recentLeads + '</tbody></table>' : '<div class="eg-empty">No leads yet.</div>') +
+      '<div class="eg-grid2">' +
+      '<div class="eg-card"><h3>New leads today</h3><p class="eg-small eg-muted" style="margin-top:-8px">Created today, newest first.</p>' +
+      (todayHtml ? '<table class="eg-table"><thead><tr><th>Lead</th><th>Interest</th><th>Source</th><th>Time</th><th>Status</th></tr></thead><tbody>' + todayHtml + '</tbody></table>' : '<div class="eg-empty">No leads today.</div>') +
+      '</div>' +
+      '<div class="eg-card"><h3>This week&rsquo;s attention</h3><p class="eg-small eg-muted" style="margin-top:-8px">Open leads with activity this week, newest activity first.</p>' +
+      (weekHtml ? '<table class="eg-table"><thead><tr><th>Lead</th><th>Interest</th><th>Source</th><th>Status</th><th>Last activity</th></tr></thead><tbody>' + weekHtml + '</tbody></table>' : '<div class="eg-empty">Nothing needs attention this week.</div>') +
+      '</div>' +
       '</div>';
   }
 
-  // package / ai_usage_allowance / ai_usage_current_period / status are now
-  // real fields on GET /api/v1/admin/tenants (confirmed against the current
-  // openapi.json - this was placeholder demo data before the backend added
-  // these; there is still no updated_at field on this resource, so
-  // "Created" can't be swapped for a real last-updated time).
   function statusPillForTenant(t){
     var map = {
       active: "green",
@@ -431,6 +541,9 @@
     document.querySelectorAll("[data-tenant-id]").forEach(function(row){
       row.addEventListener("click", function(){ openTenantDetail(row.getAttribute("data-tenant-id")); });
     });
+    document.querySelectorAll("[data-lead-drawer]").forEach(function(row){
+      row.addEventListener("click", function(){ state.leadDrawerId = row.getAttribute("data-lead-drawer"); render(); });
+    });
   }
 
   function statusPill(s){
@@ -442,40 +555,81 @@
   }
 
   // ---- Leads & Contacts ----
+  // Matches the client dashboard mockup: leads and contacts stay separate
+  // records (both in the API and here), search/filter/sort happen in the
+  // frontend, and clicking a lead row opens a drawer with the joined
+  // contact + lead detail (status change moved into the drawer instead of
+  // an inline per-row dropdown - same underlying PATCH, just a less
+  // cluttered table to match the mockup's plain columns).
+  function filteredLeads(){
+    var rows = joinedLeads();
+    var q = (state.leadSearch || "").toLowerCase().trim();
+    var now = new Date();
+    rows = rows.filter(function(r){
+      var c = r.contact || {};
+      var text = [contactName(c), c.email, c.phone, c.company, r.service_interest, r.title].filter(Boolean).join(" ").toLowerCase();
+      if (q && text.indexOf(q) === -1) return false;
+      if (state.leadStatusFilter !== "all" && r.status !== state.leadStatusFilter) return false;
+      if (state.leadSourceFilter !== "all" && r.source !== state.leadSourceFilter) return false;
+      var d = new Date(r.created_at);
+      if (state.leadDateFilter === "month" && (d.getFullYear() !== now.getFullYear() || d.getMonth() !== now.getMonth())) return false;
+      if (state.leadDateFilter === "year" && d.getFullYear() !== now.getFullYear()) return false;
+      return true;
+    });
+    return rows.sort(function(a, b){ return new Date(b.created_at) - new Date(a.created_at); });
+  }
+
+  function filteredContacts(){
+    var q = (state.contactSearch || "").toLowerCase().trim();
+    return (state.contacts || []).filter(function(c){
+      var text = [contactName(c), c.email, c.phone, c.company].filter(Boolean).join(" ").toLowerCase();
+      return !q || text.indexOf(q) !== -1;
+    }).sort(function(a, b){ return new Date(b.created_at) - new Date(a.created_at); });
+  }
+
+  function leadsTabHtml(){
+    if (!state.leads || !state.contacts) return '<div class="eg-card"><div class="eg-empty">Loading leads...</div></div>';
+    var rows = filteredLeads();
+    var lrows = rows.map(function(r){
+      return '<tr class="eg-clickrow" style="cursor:pointer" data-lead-drawer="' + esc(r.id) + '">' +
+        '<td><b>' + esc(contactName(r.contact)) + '</b></td>' +
+        '<td>' + esc(r.service_interest || r.title || "-") + '</td>' +
+        '<td><span class="eg-tag">' + esc(sourceLabel(r.source)) + '</span></td>' +
+        '<td>' + statusPill(r.status) + '</td>' +
+        '<td>' + esc(r.priority) + '</td>' +
+        '<td class="eg-small eg-muted">' + fmtDate(r.last_activity_at) + '</td>' +
+        '<td class="eg-small eg-muted">' + fmtDate(r.created_at) + '</td></tr>';
+    }).join("");
+    return '<div class="eg-card">' +
+      '<div class="eg-toolbar">' +
+      '<input id="egLeadSearch" placeholder="Search lead or contact..." value="' + esc(state.leadSearch) + '" />' +
+      '<select id="egLeadDateFilter">' + selOpts([{value:"all",label:"All time"},{value:"month",label:"This month"},{value:"year",label:"This year"}], state.leadDateFilter) + '</select>' +
+      '<select id="egLeadStatusFilter">' + selOpts(["all","new","contacted","qualified","booked","won","lost"].map(function(s){ return {value:s, label: s === "all" ? "All status" : s}; }), state.leadStatusFilter) + '</select>' +
+      '<select id="egLeadSourceFilter">' + selOpts([{value:"all",label:"All sources"},{value:"website_form",label:"Website form"},{value:"website_chat",label:"Website chat"},{value:"whatsapp",label:"WhatsApp"},{value:"voice",label:"Voice"},{value:"manual",label:"Manual"}], state.leadSourceFilter) + '</select>' +
+      '<button class="eg-btn" id="egDownloadLeadsCsv">Download Leads CSV</button>' +
+      '</div>' +
+      (lrows ? '<table class="eg-table"><thead><tr><th>Lead</th><th>Interest</th><th>Source</th><th>Status</th><th>Priority</th><th>Last Activity</th><th>Created</th></tr></thead><tbody>' + lrows + '</tbody></table>' : '<div class="eg-empty">No matching leads.</div>') +
+      '</div>';
+  }
+
+  function contactsTabHtml(){
+    if (!state.contacts) return '<div class="eg-card"><div class="eg-empty">Loading contacts...</div></div>';
+    var rows = filteredContacts();
+    var crows = rows.map(function(c){
+      return '<tr><td><b>' + esc(contactName(c)) + '</b></td><td>' + esc(c.email || "-") + '</td><td>' + esc(c.phone || "-") + '</td><td>' + esc(c.company || "-") + '</td><td>' + esc(c.preferred_channel || "-") + '</td><td class="eg-small eg-muted">' + fmtDate(c.last_interaction_at) + '</td><td class="eg-small eg-muted">' + fmtDate(c.created_at) + '</td></tr>';
+    }).join("");
+    return '<div class="eg-card">' +
+      '<div class="eg-toolbar"><input id="egContactSearch" placeholder="Search name, email, company..." value="' + esc(state.contactSearch) + '" /><button class="eg-btn" id="egDownloadContactsCsv">Download Contacts CSV</button></div>' +
+      (crows ? '<table class="eg-table"><thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Company</th><th>Preferred Channel</th><th>Last Interaction</th><th>Created</th></tr></thead><tbody>' + crows + '</tbody></table>' : '<div class="eg-empty">No matching contacts.</div>') +
+      '</div>';
+  }
+
   function leadsHtml(){
     var tabs = '<div class="eg-tabs">' +
       '<div class="eg-tab' + (state.tab === "leads" ? " active" : "") + '" data-tab="leads">Leads</div>' +
       '<div class="eg-tab' + (state.tab === "contacts" ? " active" : "") + '" data-tab="contacts">Contacts</div>' +
       '</div>';
-
-    if (state.tab === "contacts") {
-      var contacts = state.contacts;
-      if (!contacts) return tabs + '<div class="eg-card"><div class="eg-empty">Loading contacts...</div></div>';
-      var crows = contacts.map(function(c){
-        var name = ((c.first_name || "") + " " + (c.last_name || "")).trim() || "(no name)";
-        return '<tr><td><b>' + esc(name) + '</b></td><td>' + esc(c.email || "-") + '</td><td>' + esc(c.phone || "-") + '</td><td>' + esc(c.company || "-") + '</td><td class="eg-small eg-muted">' + fmtDate(c.created_at) + '</td></tr>';
-      }).join("");
-      return tabs + '<div class="eg-card">' +
-        (crows ? '<table class="eg-table"><thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Company</th><th>Created</th></tr></thead><tbody>' + crows + '</tbody></table>' : '<div class="eg-empty">No contacts yet.</div>') +
-        '</div>';
-    }
-
-    var leads = state.leads;
-    if (!leads) return tabs + '<div class="eg-card"><div class="eg-empty">Loading leads...</div></div>';
-    var statusOptions = ["new","contacted","qualified","booked","won","lost"];
-    var lrows = leads.map(function(l){
-      var opts = statusOptions.map(function(s){
-        return '<option value="' + s + '"' + (s === l.status ? " selected" : "") + '>' + s + '</option>';
-      }).join("");
-      return '<tr><td><b>' + esc(l.title || "Untitled") + '</b><div class="eg-small eg-muted">' + esc(l.service_interest || "") + '</div></td>' +
-        '<td><span class="eg-tag">' + esc(l.source) + '</span></td>' +
-        '<td>' + esc(l.priority) + '</td>' +
-        '<td><select class="eg-select" style="padding:6px 8px;font-size:12px" data-lead-status="' + esc(l.id) + '">' + opts + '</select></td>' +
-        '<td class="eg-small eg-muted">' + fmtDate(l.created_at) + '</td></tr>';
-    }).join("");
-    return tabs + '<div class="eg-card">' +
-      (lrows ? '<table class="eg-table"><thead><tr><th>Lead</th><th>Source</th><th>Priority</th><th>Status</th><th>Created</th></tr></thead><tbody>' + lrows + '</tbody></table>' : '<div class="eg-empty">No leads yet.</div>') +
-      '</div>';
+    return tabs + (state.tab === "contacts" ? contactsTabHtml() : leadsTabHtml());
   }
 
   function bindLeads(){
@@ -486,17 +640,99 @@
         render();
       });
     });
-    document.querySelectorAll("[data-lead-status]").forEach(function(el){
-      el.addEventListener("change", function(){
-        var id = el.getAttribute("data-lead-status");
-        var newStatus = el.value;
-        api("/api/v1/crm/leads/" + id, { method: "PATCH", body: { status: newStatus } })
-          .then(function(updated){
-            state.leads = state.leads.map(function(l){ return l.id === updated.id ? updated : l; });
-            showToast("Lead status updated");
-          })
-          .catch(function(err){ showToast(err.message, true); });
+    document.querySelectorAll("[data-lead-drawer]").forEach(function(el){
+      el.addEventListener("click", function(){
+        state.leadDrawerId = el.getAttribute("data-lead-drawer");
+        render();
       });
+    });
+
+    var leadSearch = document.getElementById("egLeadSearch");
+    if (leadSearch) leadSearch.addEventListener("input", function(){
+      preserveFocus(function(){ state.leadSearch = leadSearch.value; render(); });
+    });
+    var dateFilter = document.getElementById("egLeadDateFilter");
+    if (dateFilter) dateFilter.addEventListener("change", function(){ state.leadDateFilter = dateFilter.value; render(); });
+    var statusFilter = document.getElementById("egLeadStatusFilter");
+    if (statusFilter) statusFilter.addEventListener("change", function(){ state.leadStatusFilter = statusFilter.value; render(); });
+    var sourceFilter = document.getElementById("egLeadSourceFilter");
+    if (sourceFilter) sourceFilter.addEventListener("change", function(){ state.leadSourceFilter = sourceFilter.value; render(); });
+    var contactSearch = document.getElementById("egContactSearch");
+    if (contactSearch) contactSearch.addEventListener("input", function(){
+      preserveFocus(function(){ state.contactSearch = contactSearch.value; render(); });
+    });
+
+    var dlLeadsBtn = document.getElementById("egDownloadLeadsCsv");
+    if (dlLeadsBtn) dlLeadsBtn.addEventListener("click", function(){
+      var header = ["Name","Email","Phone","Company","Interest","Source","Status","Priority","Last Activity","Created","Notes"];
+      var body = filteredLeads().map(function(r){
+        var c = r.contact || {};
+        return [contactName(c), c.email, c.phone, c.company, r.service_interest || r.title, r.source, r.status, r.priority, r.last_activity_at, r.created_at, r.notes];
+      });
+      downloadCsv("edgifynow-crm-leads.csv", header, body);
+    });
+    var dlContactsBtn = document.getElementById("egDownloadContactsCsv");
+    if (dlContactsBtn) dlContactsBtn.addEventListener("click", function(){
+      var header = ["Name","Email","Phone","Company","Job Title","Preferred Channel","Last Interaction","Created"];
+      var body = filteredContacts().map(function(c){
+        return [contactName(c), c.email, c.phone, c.company, c.job_title, c.preferred_channel, c.last_interaction_at, c.created_at];
+      });
+      downloadCsv("edgifynow-crm-contacts.csv", header, body);
+    });
+  }
+
+  // ---- Lead detail drawer ----
+  function leadDrawerHtml(){
+    if (!state.leadDrawerId) return "";
+    var r = joinedLeads().filter(function(x){ return x.id === state.leadDrawerId; })[0];
+    if (!r) return "";
+    var c = r.contact || {};
+    var statusOptions = ["new", "contacted", "qualified", "booked", "won", "lost"];
+    var statusSelect = '<select class="eg-select" id="egDrawerStatus">' + statusOptions.map(function(s){
+      return '<option value="' + s + '"' + (s === r.status ? " selected" : "") + '>' + s.charAt(0).toUpperCase() + s.slice(1) + '</option>';
+    }).join("") + '</select>';
+
+    return '<div class="eg-drawer-backdrop open" id="egDrawerBackdrop"></div>' +
+      '<aside class="eg-drawer open">' +
+      '<button class="eg-drawer-close" id="egDrawerClose" aria-label="Close">&times;</button>' +
+      '<h2>' + esc(contactName(c)) + '</h2>' +
+      '<div class="eg-drawer-sub">' + esc(r.service_interest || r.title || "Lead") + '</div>' +
+      '<h4>Contact</h4>' +
+      '<div class="eg-kv"><span>Email</span><b>' + esc(c.email || "-") + '</b></div>' +
+      '<div class="eg-kv"><span>Phone</span><b>' + esc(c.phone || "-") + '</b></div>' +
+      '<div class="eg-kv"><span>Company</span><b>' + esc(c.company || "-") + '</b></div>' +
+      '<div class="eg-kv"><span>Job title</span><b>' + esc(c.job_title || "-") + '</b></div>' +
+      '<h4>Lead</h4>' +
+      '<div class="eg-kv"><span>Interest</span><b>' + esc(r.service_interest || "-") + '</b></div>' +
+      '<div class="eg-kv"><span>Source</span><b>' + esc(sourceLabel(r.source)) + '</b></div>' +
+      '<div class="eg-kv"><span>Priority</span><b>' + esc(r.priority) + '</b></div>' +
+      '<div class="eg-kv"><span>Created</span><b>' + fmtDate(r.created_at) + '</b></div>' +
+      '<div class="eg-kv"><span>Last activity</span><b>' + fmtDate(r.last_activity_at) + '</b></div>' +
+      '<h4>Status</h4>' +
+      '<div class="eg-form-row">' + statusSelect + '</div>' +
+      '<button class="eg-btn" id="egDrawerSaveStatus">Save status</button>' +
+      '<h4>Notes</h4>' +
+      '<div style="line-height:1.55">' + (r.notes ? esc(r.notes) : '<span class="eg-muted">-</span>') + '</div>' +
+      '</aside>';
+  }
+
+  function bindDrawer(){
+    var backdrop = document.getElementById("egDrawerBackdrop");
+    if (backdrop) backdrop.addEventListener("click", function(){ state.leadDrawerId = null; render(); });
+    var closeBtn = document.getElementById("egDrawerClose");
+    if (closeBtn) closeBtn.addEventListener("click", function(){ state.leadDrawerId = null; render(); });
+    var saveBtn = document.getElementById("egDrawerSaveStatus");
+    if (saveBtn) saveBtn.addEventListener("click", function(){
+      var id = state.leadDrawerId;
+      var newStatus = document.getElementById("egDrawerStatus").value;
+      saveBtn.disabled = true; saveBtn.textContent = "Saving...";
+      api("/api/v1/crm/leads/" + id, { method: "PATCH", body: { status: newStatus } })
+        .then(function(updated){
+          state.leads = (state.leads || []).map(function(l){ return l.id === updated.id ? updated : l; });
+          showToast("Lead updated");
+          render();
+        })
+        .catch(function(err){ showToast(err.message, true); saveBtn.disabled = false; saveBtn.textContent = "Save status"; });
     });
   }
 

@@ -97,6 +97,19 @@ a{text-decoration:none;color:inherit}
 .eg-statusbox{padding:12px;border-radius:12px;background:#f6faf7;border:1px solid #d9eee2;margin-top:12px;font-size:13px}
 .eg-check{display:flex;gap:10px;align-items:flex-start;margin:9px 0;color:#334;font-size:13px}
 .eg-check span{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;background:#e8f7f0;color:var(--green);font-weight:700;flex:0 0 22px;font-size:12px}
+.eg-toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
+.eg-toolbar input,.eg-toolbar select{height:38px;border:1px solid var(--line);border-radius:10px;background:#fff;padding:0 11px;font:inherit;color:var(--ink)}
+.eg-toolbar input{min-width:200px;flex:1}
+.eg-drawer-backdrop{display:none;position:fixed;inset:0;background:rgba(15,27,55,.35);z-index:40}
+.eg-drawer-backdrop.open{display:block}
+.eg-drawer{position:fixed;right:-440px;top:0;height:100vh;width:420px;max-width:92vw;background:#fff;z-index:41;box-shadow:-10px 0 35px rgba(16,29,60,.18);padding:26px;transition:right .2s ease;overflow-y:auto}
+.eg-drawer.open{right:0}
+.eg-drawer-close{float:right;border:0;background:#f0f3f9;width:34px;height:34px;border-radius:50%;cursor:pointer;font-size:16px;line-height:1}
+.eg-drawer h2{margin:0 0 4px;font-size:20px}
+.eg-drawer-sub{color:var(--muted);margin-bottom:20px}
+.eg-drawer h4{font-size:11px;letter-spacing:.08em;color:var(--muted);text-transform:uppercase;margin:20px 0 8px}
+.eg-kv{display:grid;grid-template-columns:110px 1fr;gap:8px;padding:8px 0;border-bottom:1px solid var(--line);font-size:13px}
+.eg-kv span:first-child{color:var(--muted)}
 @media(max-width:1000px){
   .eg-shell{grid-template-columns:1fr}
   .eg-sidebar{position:relative;height:auto}
