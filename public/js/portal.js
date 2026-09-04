@@ -33,6 +33,9 @@
     overviewPage: 1,
     overviewKebabId: null,
     leadDrawerId: null,
+    leadAppointments: null,
+    apiKeys: null,
+    newApiKeyReveal: null,
     leadSearch: "",
     leadDateFilter: "all",
     leadStatusFilter: "all",
@@ -251,6 +254,9 @@
   function ensureDocuments(){
     api("/api/v1/documents").then(function(d){ state.documents = d; render(); }).catch(function(err){ showToast(err.message, true); });
   }
+  function ensureApiKeys(){
+    api("/api/v1/integrations/api-keys").then(function(d){ state.apiKeys = d; render(); }).catch(function(err){ showToast(err.message, true); });
+  }
   function ensureAssistants(){
     api("/api/v1/assistants").then(function(d){
       state.assistants = d;
@@ -282,6 +288,20 @@
     }).catch(function(){ state.tenantUsageSummary = null; });
   }
 
+  // Journey C ("client can review it"): appointments are only fetchable
+  // per-lead (GET /api/v1/crm/leads/{id}/appointments - no global list
+  // endpoint exists), so they're loaded here alongside the lead drawer
+  // rather than as their own portal view.
+  function openLeadDrawer(id){
+    state.leadDrawerId = id;
+    state.leadAppointments = null;
+    render();
+    api("/api/v1/crm/leads/" + id + "/appointments").then(function(d){
+      state.leadAppointments = d;
+      render();
+    }).catch(function(){ state.leadAppointments = []; });
+  }
+
   function setView(v){
     state.view = v;
     if (v === "leads") { ensureLeads(function(){}); ensureContacts(function(){}); }
@@ -289,6 +309,7 @@
     if (v === "assistant") ensureAssistants();
     if (v === "tenants") ensureTenants();
     if (v === "demo") { ensureAssistants(); ensureDocuments(); }
+    if (v === "integrations") ensureApiKeys();
     render();
   }
 
@@ -346,7 +367,8 @@
       { id: "dashboard", label: "Dashboard", icon: "◉" },
       { id: "leads", label: "Leads & Contacts", icon: "◫" },
       { id: "knowledge", label: "Knowledge", icon: "▤" },
-      { id: "assistant", label: "AI Assistant", icon: "◎" }
+      { id: "assistant", label: "AI Assistant", icon: "◎" },
+      { id: "integrations", label: "Integrations", icon: "⚿" }
     ];
   }
 
@@ -403,6 +425,7 @@
     if (state.view === "tenants") return "Clients";
     if (state.view === "tenantDetail") return state.tenantDetail ? (state.tenantDetail.name || state.tenantDetail.slug) : "Client details";
     if (state.view === "demo") return "Instant Demo";
+    if (state.view === "integrations") return "Integrations";
     return "";
   }
   function viewSub(){
@@ -413,6 +436,7 @@
     if (state.view === "tenants") return "Manage EdgifyNow client workspaces.";
     if (state.view === "tenantDetail") return "Client account, billing and usage.";
     if (state.view === "demo") return "Upload a document and get a live AI answer, right now.";
+    if (state.view === "integrations") return "Generate a widget key to embed your assistant on your website.";
     return "";
   }
 
@@ -426,6 +450,7 @@
     if (state.view === "tenants") { el.innerHTML = tenantsHtml(); bindTenants(); return; }
     if (state.view === "tenantDetail") { el.innerHTML = tenantDetailHtml(); bindTenantDetail(); return; }
     if (state.view === "demo") { el.innerHTML = demoHtml(); bindDemo(); return; }
+    if (state.view === "integrations") { el.innerHTML = integrationsHtml(); bindIntegrations(); return; }
   }
 
   // ---- Dashboard ----
@@ -607,7 +632,7 @@
       row.addEventListener("click", function(){ openTenantDetail(row.getAttribute("data-tenant-id")); });
     });
     document.querySelectorAll("[data-lead-drawer]").forEach(function(row){
-      row.addEventListener("click", function(){ state.leadDrawerId = row.getAttribute("data-lead-drawer"); render(); });
+      row.addEventListener("click", function(){ openLeadDrawer(row.getAttribute("data-lead-drawer")); });
     });
 
     var overviewSearch = document.getElementById("egOverviewSearch");
@@ -751,10 +776,7 @@
       });
     });
     document.querySelectorAll("[data-lead-drawer]").forEach(function(el){
-      el.addEventListener("click", function(){
-        state.leadDrawerId = el.getAttribute("data-lead-drawer");
-        render();
-      });
+      el.addEventListener("click", function(){ openLeadDrawer(el.getAttribute("data-lead-drawer")); });
     });
 
     var leadSearch = document.getElementById("egLeadSearch");
@@ -823,14 +845,39 @@
       '<button class="eg-btn" id="egDrawerSaveStatus">Save status</button>' +
       '<h4>Notes</h4>' +
       '<div style="line-height:1.55">' + (r.notes ? esc(r.notes) : '<span class="eg-muted">-</span>') + '</div>' +
+      '<h4>Appointments</h4>' +
+      appointmentsHtml() +
       '</aside>';
+  }
+
+  // Journey C: a visitor books via the widget (POST /api/v1/public/
+  // appointments), and the client needs to be able to review it here.
+  // There's no global appointments list endpoint, only per-lead, so this
+  // is fetched by openLeadDrawer() alongside the lead itself.
+  function appointmentsHtml(){
+    if (state.leadAppointments === null) return '<div class="eg-small eg-muted">Loading...</div>';
+    if (!state.leadAppointments.length) return '<div class="eg-small eg-muted">No appointments for this lead.</div>';
+    var apptStatusOptions = ["scheduled", "confirmed", "cancelled", "completed", "no_show"];
+    return state.leadAppointments.map(function(a){
+      var opts = apptStatusOptions.map(function(s){
+        return '<option value="' + s + '"' + (s === a.status ? " selected" : "") + '>' + esc(s.replace("_", " ")) + '</option>';
+      }).join("");
+      var when = fmtDate(a.start_at) + (a.end_at ? " &ndash; " + new Date(a.end_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "");
+      var where = a.meeting_url ? '<a href="' + esc(a.meeting_url) + '" target="_blank" rel="noopener">Meeting link</a>' : (a.location ? esc(a.location) : "");
+      return '<div class="eg-statusbox" style="margin-bottom:10px">' +
+        '<b>' + when + '</b>' +
+        (where ? '<div class="eg-small eg-muted" style="margin-top:2px">' + where + '</div>' : "") +
+        (a.notes ? '<div class="eg-small" style="margin-top:6px">' + esc(a.notes) + '</div>' : "") +
+        '<div style="margin-top:8px"><select class="eg-select" style="padding:6px 8px;font-size:12px;width:auto" data-appt-status="' + esc(a.id) + '">' + opts + '</select></div>' +
+        '</div>';
+    }).join("");
   }
 
   function bindDrawer(){
     var backdrop = document.getElementById("egDrawerBackdrop");
-    if (backdrop) backdrop.addEventListener("click", function(){ state.leadDrawerId = null; render(); });
+    if (backdrop) backdrop.addEventListener("click", function(){ state.leadDrawerId = null; state.leadAppointments = null; render(); });
     var closeBtn = document.getElementById("egDrawerClose");
-    if (closeBtn) closeBtn.addEventListener("click", function(){ state.leadDrawerId = null; render(); });
+    if (closeBtn) closeBtn.addEventListener("click", function(){ state.leadDrawerId = null; state.leadAppointments = null; render(); });
     var saveBtn = document.getElementById("egDrawerSaveStatus");
     if (saveBtn) saveBtn.addEventListener("click", function(){
       var id = state.leadDrawerId;
@@ -843,6 +890,18 @@
           render();
         })
         .catch(function(err){ showToast(err.message, true); saveBtn.disabled = false; saveBtn.textContent = "Save status"; });
+    });
+    document.querySelectorAll("[data-appt-status]").forEach(function(sel){
+      sel.addEventListener("change", function(){
+        var id = sel.getAttribute("data-appt-status");
+        var newStatus = sel.value;
+        api("/api/v1/crm/appointments/" + id, { method: "PATCH", body: { status: newStatus } })
+          .then(function(updated){
+            state.leadAppointments = (state.leadAppointments || []).map(function(a){ return a.id === updated.id ? updated : a; });
+            showToast("Appointment updated");
+          })
+          .catch(function(err){ showToast(err.message, true); });
+      });
     });
   }
 
@@ -1492,6 +1551,109 @@
           .then(function(){ leadBtn.disabled = false; leadBtn.textContent = "Capture demo lead"; });
       });
     }
+  }
+
+  // ---- Integrations (widget keys) ----
+  // Journey A's "widget generated" step: there was no UI anywhere to
+  // create the key a client's website widget needs. POST /api/v1/
+  // integrations/api-keys is scoped to whoever is logged in (no tenant_id
+  // param), so it can only ever create a key for the CURRENT account - an
+  // admin can't generate one on behalf of another tenant through this
+  // endpoint. That means this has to live in the client portal, not the
+  // admin one: the client logs in (credentials the admin set at creation
+  // time) and generates their own key here.
+  function integrationsHtml(){
+    var revealHtml = "";
+    if (state.newApiKeyReveal) {
+      var widgetBase = (window.EDGIFY_CONFIG && window.EDGIFY_CONFIG.WIDGET_BASE_URL) || "https://app-dev.edgifynow.com/widget";
+      var widgetUrl = widgetBase + "?key=" + encodeURIComponent(state.newApiKeyReveal.api_key);
+      var snippet = '<script>\n(function(){\n  var WIDGET_URL = "' + widgetUrl + '";\n' +
+        '  var BUBBLE = "70px", PANEL_W = "400px", PANEL_H = "600px";\n' +
+        '  var f = document.createElement("iframe");\n' +
+        '  f.src = WIDGET_URL;\n' +
+        '  f.title = "Business Assistant";\n' +
+        '  f.allow = "clipboard-write";\n' +
+        '  f.style.cssText = "border:0!important;position:fixed!important;right:20px!important;bottom:20px!important;" +\n' +
+        '    "width:" + BUBBLE + "!important;height:" + BUBBLE + "!important;" +\n' +
+        '    "max-width:calc(100vw - 40px)!important;max-height:calc(100vh - 40px)!important;" +\n' +
+        '    "z-index:2147483647!important;background:transparent!important;border-radius:16px!important;" +\n' +
+        '    "transition:width .15s ease,height .15s ease;";\n' +
+        '  document.body.appendChild(f);\n' +
+        '  window.addEventListener("message", function(e){\n' +
+        '    if (!e.data || e.data.source !== "edgifynow-widget") return;\n' +
+        '    f.style.width = e.data.open ? PANEL_W : BUBBLE;\n' +
+        '    f.style.height = e.data.open ? PANEL_H : BUBBLE;\n' +
+        '  });\n})();\n<\/script>';
+      revealHtml = '<div class="eg-card" style="border-color:#f0c869;background:#fffbf0;margin-bottom:16px">' +
+        '<h3>Your new widget key</h3>' +
+        '<div class="eg-error" style="background:#fff7df;color:#9b7100;margin-bottom:12px">Copy this now - you will not be able to see the full key again after leaving this page.</div>' +
+        '<div class="eg-form-row"><label>Key (' + esc(state.newApiKeyReveal.name) + ')</label><input class="eg-input" readonly value="' + esc(state.newApiKeyReveal.api_key) + '" onclick="this.select()" /></div>' +
+        '<div class="eg-form-row"><label>Embed this on your website</label><textarea class="eg-textarea" readonly style="min-height:160px;font-family:monospace;font-size:12px" onclick="this.select()">' + esc(snippet) + '</textarea></div>' +
+        '<button class="eg-btn" id="egDismissKeyReveal">I have copied this</button>' +
+        '</div>';
+    }
+
+    var listHtml;
+    if (!state.apiKeys) {
+      listHtml = '<div class="eg-empty">Loading...</div>';
+    } else if (!state.apiKeys.length) {
+      listHtml = '<div class="eg-empty">No widget keys yet - create one below to embed your assistant on your website.</div>';
+    } else {
+      var rows = state.apiKeys.map(function(k){
+        return '<tr><td><b>' + esc(k.name) + '</b></td>' +
+          '<td class="eg-small eg-muted">' + esc(k.key_prefix) + '&hellip;</td>' +
+          '<td>' + (k.is_active ? '<span class="eg-pill green">Active</span>' : '<span class="eg-pill red">Revoked</span>') + '</td>' +
+          '<td class="eg-small eg-muted">' + fmtDate(k.created_at) + '</td>' +
+          '<td>' + (k.is_active ? '<button class="eg-btn danger" style="padding:6px 10px" data-revoke-key="' + esc(k.id) + '">Revoke</button>' : "") + '</td></tr>';
+      }).join("");
+      listHtml = '<table class="eg-table"><thead><tr><th>Name</th><th>Key prefix</th><th>Status</th><th>Created</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>';
+    }
+
+    return revealHtml +
+      '<div class="eg-card" style="margin-bottom:16px">' +
+      '<h3>Widget keys</h3>' +
+      '<p class="eg-small eg-muted" style="margin-top:-8px">A widget key lets your website embed your AI assistant. Treat it like a publishable key (safe to put in your site\'s HTML) - it can\'t access your CRM, leads, or account settings.</p>' +
+      listHtml +
+      '</div>' +
+      '<div class="eg-card">' +
+      '<h3>Create a new widget key</h3>' +
+      '<div class="eg-form-row"><label>Name</label><input class="eg-input" id="egNewKeyName" placeholder="e.g. Main website" /></div>' +
+      '<button class="eg-btn" id="egCreateKey">Generate widget key</button>' +
+      '</div>';
+  }
+
+  function bindIntegrations(){
+    var dismissBtn = document.getElementById("egDismissKeyReveal");
+    if (dismissBtn) dismissBtn.addEventListener("click", function(){ state.newApiKeyReveal = null; render(); });
+
+    var createBtn = document.getElementById("egCreateKey");
+    if (createBtn) createBtn.addEventListener("click", function(){
+      var name = document.getElementById("egNewKeyName").value.trim();
+      if (!name) { showToast("Please name this key (e.g. which website it's for)", true); return; }
+      createBtn.disabled = true; createBtn.textContent = "Generating...";
+      api("/api/v1/integrations/api-keys", { method: "POST", body: { name: name } })
+        .then(function(created){
+          state.newApiKeyReveal = created;
+          showToast("Widget key created");
+          ensureApiKeys();
+        })
+        .catch(function(err){ showToast(err.message, true); })
+        .then(function(){ createBtn.disabled = false; createBtn.textContent = "Generate widget key"; });
+    });
+
+    document.querySelectorAll("[data-revoke-key]").forEach(function(btn){
+      btn.addEventListener("click", function(){
+        var id = btn.getAttribute("data-revoke-key");
+        if (!window.confirm("Revoke this widget key? Any website embedding it will stop working immediately.")) return;
+        btn.disabled = true; btn.textContent = "Revoking...";
+        api("/api/v1/integrations/api-keys/" + id, { method: "DELETE" })
+          .then(function(){
+            showToast("Widget key revoked");
+            ensureApiKeys();
+          })
+          .catch(function(err){ showToast(err.message, true); btn.disabled = false; btn.textContent = "Revoke"; });
+      });
+    });
   }
 
   init();
