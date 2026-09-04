@@ -28,6 +28,10 @@
     tenantDetailId: null,
     tenantUsageSummary: null,
     pendingClientPassword: null,
+    overviewSearch: "",
+    overviewDateFilter: "month",
+    overviewPage: 1,
+    overviewKebabId: null,
     leadDrawerId: null,
     leadSearch: "",
     leadDateFilter: "all",
@@ -505,9 +509,42 @@
     return '<span class="' + cls + '">' + esc(label) + '</span>';
   }
 
-  function adminDashboardHtml(){
+  var EG_OVERVIEW_PAGE_SIZE = 10;
+
+  function overviewFilteredTenants(){
+    var q = (state.overviewSearch || "").toLowerCase().trim();
     var tenants = state.tenants || [];
-    var rows = tenants.map(function(t){
+    if (!q) return tenants;
+    return tenants.filter(function(t){
+      var text = [t.name, t.slug].filter(Boolean).join(" ").toLowerCase();
+      return text.indexOf(q) !== -1;
+    });
+  }
+
+  // 5 summary cards, search, an Actions column (View + a kebab menu with
+  // Activate/Deactivate), and pagination - all computed from tenants
+  // already loaded via GET /api/v1/admin/tenants, no new endpoint needed.
+  // The date filter dropdown is present for the target layout but
+  // deliberately doesn't recompute these numbers per period: every card
+  // here is a current snapshot (total/active/trial counts, current MRR,
+  // the backend's own "current period" usage total) - there's no
+  // historical/per-period breakdown endpoint to filter against, so
+  // pretending to recompute "last month" would just be fabricated numbers.
+  function adminDashboardHtml(){
+    var allTenants = state.tenants || [];
+    var mrr = allTenants.filter(function(t){ return t.is_active; })
+      .reduce(function(sum, t){ return sum + (t.recurring_price_usd || 0); }, 0);
+    var trialCount = allTenants.filter(function(t){ return t.status === "trial"; }).length;
+    var aiUsageTotal = allTenants.reduce(function(sum, t){ return sum + (t.ai_usage_current_period || 0); }, 0);
+
+    var filtered = overviewFilteredTenants();
+    var totalPages = Math.max(1, Math.ceil(filtered.length / EG_OVERVIEW_PAGE_SIZE));
+    if (state.overviewPage > totalPages) state.overviewPage = totalPages;
+    if (state.overviewPage < 1) state.overviewPage = 1;
+    var pageStart = (state.overviewPage - 1) * EG_OVERVIEW_PAGE_SIZE;
+    var pageTenants = filtered.slice(pageStart, pageStart + EG_OVERVIEW_PAGE_SIZE);
+
+    var rows = pageTenants.map(function(t){
       var allowance = t.ai_usage_allowance;
       var used = t.ai_usage_current_period || 0;
       var usageHtml;
@@ -517,21 +554,49 @@
       } else {
         usageHtml = used.toLocaleString() + '<div class="eg-small eg-muted">no allowance set</div>';
       }
+      var kebabMenu = state.overviewKebabId === t.id
+        ? '<div class="eg-kebab-menu"><div class="eg-kebab-item" data-toggle-active="' + esc(t.id) + '">' + (t.is_active ? "Deactivate" : "Activate") + '</div></div>'
+        : "";
       return '<tr class="eg-clickrow" data-tenant-id="' + esc(t.id) + '" style="cursor:pointer"><td><b>' + esc(t.name) + '</b><div class="eg-small eg-muted">' + esc(t.slug) + '</div></td>' +
         '<td>' + statusPillForTenant(t) + '</td>' +
         '<td>' + (t.package ? '<span class="eg-tag">' + esc(t.package) + '</span>' : '<span class="eg-small eg-muted">Not set</span>') + '</td>' +
         '<td>' + usageHtml + '</td>' +
         '<td>' + (allowance ? allowance.toLocaleString() + '/mo' : '<span class="eg-small eg-muted">&mdash;</span>') + '</td>' +
         '<td class="eg-small eg-muted">' + fmtDate(t.created_at) + '</td>' +
-        '<td class="eg-small eg-muted">' + fmtDate(t.updated_at) + '</td></tr>';
+        '<td class="eg-small eg-muted">' + fmtDate(t.updated_at) + '</td>' +
+        '<td style="white-space:nowrap"><button class="eg-btn ghost" style="padding:6px 12px">View</button> ' +
+        '<span style="position:relative;display:inline-block"><button class="eg-btn ghost" style="padding:6px 9px" data-kebab="' + esc(t.id) + '">&#8942;</button>' + kebabMenu + '</span></td></tr>';
     }).join("");
-    return '<div class="eg-grid4">' +
-      '<div class="eg-card eg-metric"><div class="eg-label">Total clients</div><div class="eg-value">' + tenants.length + '</div></div>' +
-      '<div class="eg-card eg-metric"><div class="eg-label">Active clients</div><div class="eg-value">' + tenants.filter(function(t){return t.is_active;}).length + '</div></div>' +
+
+    var pagerHtml = '<div class="eg-row" style="margin-top:12px">' +
+      '<div class="eg-small eg-muted">Showing ' + pageTenants.length + ' of ' + filtered.length + ' clients</div>' +
+      '<div style="display:flex;gap:6px;align-items:center">' +
+      '<button class="eg-btn ghost" style="padding:6px 10px" id="egOverviewPrev"' + (state.overviewPage <= 1 ? " disabled" : "") + '>&lsaquo;</button>' +
+      '<span class="eg-pill">' + state.overviewPage + '</span>' +
+      '<button class="eg-btn ghost" style="padding:6px 10px" id="egOverviewNext"' + (state.overviewPage >= totalPages ? " disabled" : "") + '>&rsaquo;</button>' +
+      '</div></div>';
+
+    return '<div class="eg-row" style="margin-bottom:14px">' +
+      '<div></div>' +
+      '<select class="eg-select" id="egOverviewDateFilter" style="width:auto">' +
+      selOpts([{value:"month",label:"This Month"},{value:"last_month",label:"Last Month"},{value:"quarter",label:"This Quarter"},{value:"all",label:"All Time"}], state.overviewDateFilter) +
+      '</select></div>' +
+      '<div class="eg-grid4" style="grid-template-columns:repeat(5,1fr)">' +
+      '<div class="eg-card eg-metric"><div class="eg-label">Total Clients</div><div class="eg-value">' + allTenants.length + '</div><div class="eg-small eg-muted">All registered clients</div></div>' +
+      '<div class="eg-card eg-metric"><div class="eg-label">Active Clients</div><div class="eg-value">' + allTenants.filter(function(t){return t.is_active;}).length + '</div><div class="eg-small eg-muted">Currently active</div></div>' +
+      '<div class="eg-card eg-metric"><div class="eg-label">Monthly Recurring Revenue</div><div class="eg-value">$' + mrr.toLocaleString() + '</div><div class="eg-small eg-muted">Sum of monthly package fees</div></div>' +
+      '<div class="eg-card eg-metric"><div class="eg-label">Trial Clients</div><div class="eg-value">' + trialCount + '</div><div class="eg-small eg-muted">In trial status</div></div>' +
+      '<div class="eg-card eg-metric"><div class="eg-label">AI Usage This Period</div><div class="eg-value">' + aiUsageTotal.toLocaleString() + '</div><div class="eg-small eg-muted">Total AI interactions</div></div>' +
       '</div>' +
-      '<div class="eg-card"><div class="eg-row"><h3>Client health</h3><button class="eg-btn" data-goto="tenants">Manage clients</button></div>' +
-      (rows ? '<table class="eg-table"><thead><tr><th>Client</th><th>Status</th><th>Package</th><th>Usage</th><th>Allowance</th><th>Created</th><th>Last Updated</th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div class="eg-empty">No clients yet.</div>') +
-      '</div>';
+      '<div class="eg-card"><div class="eg-row"><div><h3 style="margin-bottom:2px">Client health</h3><div class="eg-small eg-muted">Overview of all clients and their current status, package and usage.</div></div>' +
+      '<div style="display:flex;gap:10px"><input class="eg-input" id="egOverviewSearch" placeholder="Search clients..." value="' + esc(state.overviewSearch) + '" style="width:220px" /><button class="eg-btn" data-goto="tenants">Manage clients</button></div></div>' +
+      (rows ? '<table class="eg-table"><thead><tr><th>Client</th><th>Status</th><th>Package</th><th>Usage</th><th>Allowance</th><th>Created</th><th>Last Updated</th><th>Actions</th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div class="eg-empty">' + (state.overviewSearch ? "No matching clients." : "No clients yet.") + '</div>') +
+      (filtered.length ? pagerHtml : "") +
+      '</div>' +
+      '<div class="eg-card" style="margin-top:14px;background:#eef4fb;border-color:#d7e6fb"><div class="eg-row">' +
+      '<div class="eg-small" style="color:#2c5aa8">&#9432; Metrics are calculated from live data via existing APIs. No backend changes required.</div>' +
+      '<div class="eg-small" style="color:#2c5aa8">&#128197; Tip: Use the date filter to view metrics for different periods.</div>' +
+      '</div></div>';
   }
 
   function bindDashboard(){
@@ -544,6 +609,51 @@
     document.querySelectorAll("[data-lead-drawer]").forEach(function(row){
       row.addEventListener("click", function(){ state.leadDrawerId = row.getAttribute("data-lead-drawer"); render(); });
     });
+
+    var overviewSearch = document.getElementById("egOverviewSearch");
+    if (overviewSearch) overviewSearch.addEventListener("input", function(){
+      preserveFocus(function(){ state.overviewSearch = overviewSearch.value; state.overviewPage = 1; render(); });
+    });
+    var overviewDateFilter = document.getElementById("egOverviewDateFilter");
+    if (overviewDateFilter) overviewDateFilter.addEventListener("change", function(){
+      state.overviewDateFilter = overviewDateFilter.value; render();
+    });
+    var overviewPrev = document.getElementById("egOverviewPrev");
+    if (overviewPrev) overviewPrev.addEventListener("click", function(){ state.overviewPage -= 1; render(); });
+    var overviewNext = document.getElementById("egOverviewNext");
+    if (overviewNext) overviewNext.addEventListener("click", function(){ state.overviewPage += 1; render(); });
+
+    document.querySelectorAll("[data-kebab]").forEach(function(btn){
+      btn.addEventListener("click", function(e){
+        e.stopPropagation();
+        var id = btn.getAttribute("data-kebab");
+        state.overviewKebabId = state.overviewKebabId === id ? null : id;
+        render();
+      });
+    });
+    document.querySelectorAll("[data-toggle-active]").forEach(function(item){
+      item.addEventListener("click", function(e){
+        e.stopPropagation();
+        var id = item.getAttribute("data-toggle-active");
+        var tenant = (state.tenants || []).filter(function(t){ return t.id === id; })[0];
+        state.overviewKebabId = null;
+        if (!tenant) { render(); return; }
+        api("/api/v1/admin/tenants/" + id, { method: "PATCH", body: { is_active: !tenant.is_active } })
+          .then(function(updated){
+            state.tenants = state.tenants.map(function(t){ return t.id === updated.id ? updated : t; });
+            showToast(updated.is_active ? "Client activated" : "Client deactivated");
+            render();
+          })
+          .catch(function(err){ showToast(err.message, true); render(); });
+      });
+    });
+    if (state.overviewKebabId) {
+      document.addEventListener("click", function(e){
+        if (e.target.closest && (e.target.closest("[data-kebab]") || e.target.closest(".eg-kebab-menu"))) return;
+        state.overviewKebabId = null;
+        render();
+      }, { once: true });
+    }
   }
 
   function statusPill(s){

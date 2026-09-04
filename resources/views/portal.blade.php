@@ -110,6 +110,9 @@ a{text-decoration:none;color:inherit}
 .eg-drawer h4{font-size:11px;letter-spacing:.08em;color:var(--muted);text-transform:uppercase;margin:20px 0 8px}
 .eg-kv{display:grid;grid-template-columns:110px 1fr;gap:8px;padding:8px 0;border-bottom:1px solid var(--line);font-size:13px}
 .eg-kv span:first-child{color:var(--muted)}
+.eg-kebab-menu{position:absolute;right:0;top:100%;margin-top:4px;background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 24px rgba(16,29,60,.15);z-index:5;min-width:140px;overflow:hidden}
+.eg-kebab-item{padding:10px 14px;font-size:13px;cursor:pointer}
+.eg-kebab-item:hover{background:var(--soft)}
 @media(max-width:1000px){
   .eg-shell{grid-template-columns:1fr}
   .eg-sidebar{position:relative;height:auto}
