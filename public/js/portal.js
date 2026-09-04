@@ -198,11 +198,9 @@
       render();
     }).catch(function(err){ showToast(err.message, true); });
     // Per-channel AI-interaction/lead breakdown - see channelSummaryHtml()
-    // below. This endpoint doesn't exist on the backend yet (checked
-    // openapi.json - only GET/PATCH /api/v1/admin/tenants/{id} exist), so a
-    // 404 here is expected today, not an error worth a toast. Fetched
-    // optimistically so the table starts showing real numbers the moment
-    // the backend adds it, with no further frontend change.
+    // below. Now a real backend endpoint (added after this was first
+    // wired up). A failure here still fails silently (no toast) since it's
+    // secondary to the main tenant load.
     api("/api/v1/admin/tenants/" + id + "/usage-summary").then(function(d){
       state.tenantUsageSummary = d;
       render();
@@ -397,24 +395,6 @@
     return '<span class="' + cls + '">' + esc(label) + '</span>';
   }
 
-  // There is no updated_at field on the tenant resource (checked
-  // openapi.json). This column is explicitly demo-only, requested for
-  // demo purposes - deterministic per tenant id (not random) so it stays
-  // stable across renders, and clearly labelled as demo data in both the
-  // column header and the disclosure note below the table so it can't be
-  // mistaken for something the API actually returns. Remove this function
-  // and column the moment a real updated_at field exists.
-  function demoLastUpdatedFor(tenant){
-    var id = tenant.id || tenant.slug || "";
-    var seed = 0;
-    for (var i = 0; i < id.length; i++) seed = (seed + id.charCodeAt(i) * (i + 1)) % 100000;
-    var created = tenant.created_at ? new Date(tenant.created_at).getTime() : Date.now();
-    var now = Date.now();
-    var span = Math.max(now - created, 0);
-    var offset = span * ((seed % 1000) / 1000);
-    return new Date(created + offset);
-  }
-
   function adminDashboardHtml(){
     var tenants = state.tenants || [];
     var rows = tenants.map(function(t){
@@ -427,14 +407,13 @@
       } else {
         usageHtml = used.toLocaleString() + '<div class="eg-small eg-muted">no allowance set</div>';
       }
-      var demoUpdatedAt = demoLastUpdatedFor(t);
       return '<tr class="eg-clickrow" data-tenant-id="' + esc(t.id) + '" style="cursor:pointer"><td><b>' + esc(t.name) + '</b><div class="eg-small eg-muted">' + esc(t.slug) + '</div></td>' +
         '<td>' + statusPillForTenant(t) + '</td>' +
         '<td>' + (t.package ? '<span class="eg-tag">' + esc(t.package) + '</span>' : '<span class="eg-small eg-muted">Not set</span>') + '</td>' +
         '<td>' + usageHtml + '</td>' +
         '<td>' + (allowance ? allowance.toLocaleString() + '/mo' : '<span class="eg-small eg-muted">&mdash;</span>') + '</td>' +
         '<td class="eg-small eg-muted">' + fmtDate(t.created_at) + '</td>' +
-        '<td class="eg-small eg-muted">' + fmtDate(demoUpdatedAt) + '</td></tr>';
+        '<td class="eg-small eg-muted">' + fmtDate(t.updated_at) + '</td></tr>';
     }).join("");
     return '<div class="eg-grid4">' +
       '<div class="eg-card eg-metric"><div class="eg-label">Total clients</div><div class="eg-value">' + tenants.length + '</div></div>' +
@@ -442,7 +421,6 @@
       '</div>' +
       '<div class="eg-card"><div class="eg-row"><h3>Client health</h3><button class="eg-btn" data-goto="tenants">Manage clients</button></div>' +
       (rows ? '<table class="eg-table"><thead><tr><th>Client</th><th>Status</th><th>Package</th><th>Usage</th><th>Allowance</th><th>Created</th><th>Last Updated</th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div class="eg-empty">No clients yet.</div>') +
-      (rows ? '<div class="eg-small eg-muted" style="margin-top:10px">Client / Status / Package / Usage / Allowance / Created are live from GET /api/v1/admin/tenants. “Last Updated” is placeholder demo data only — there is no updated_at field on this resource yet.</div>' : "") +
       '</div>';
   }
 
@@ -898,29 +876,28 @@
       '<div class="eg-card">' +
       '<h3>Usage &amp; channels</h3>' +
       '<div class="eg-form-row"><label>AI interaction usage (this period)</label><div class="eg-input" style="background:#f7f9fc">' + usageHtml + '</div></div>' +
-      '<div class="eg-form-row"><label>WhatsApp</label><div class="eg-input" style="background:#f7f9fc">' + (t.whatsapp_enabled ? 'Enabled &middot; ' + (t.whatsapp_number ? esc(t.whatsapp_number) : 'no number set') : 'Disabled') + '</div></div>' +
-      '<div class="eg-form-row"><label>Voice AI</label><div class="eg-input" style="background:#f7f9fc">' + (t.voice_enabled ? 'Enabled &middot; ' + (t.voice_number ? esc(t.voice_number) : 'no number set') : 'Disabled') + '</div></div>' +
-      '<div class="eg-small eg-muted">Usage, WhatsApp and Voice AI are read-only here &mdash; PATCH /api/v1/admin/tenants/{id} does not currently accept whatsapp_enabled, whatsapp_number, voice_enabled or voice_number, so there is no way to save changes to them yet. Flagged separately to the backend team.</div>' +
+      '<div class="eg-form-row"><label><input type="checkbox" id="egDetailWhatsappEnabled"' + (t.whatsapp_enabled ? ' checked' : '') + ' style="margin-right:6px" />WhatsApp enabled</label></div>' +
+      '<div class="eg-form-row"><label>WhatsApp number</label><input class="eg-input" id="egDetailWhatsappNumber" value="' + esc(t.whatsapp_number || "") + '" placeholder="+15551234567" /></div>' +
+      '<div class="eg-form-row"><label><input type="checkbox" id="egDetailVoiceEnabled"' + (t.voice_enabled ? ' checked' : '') + ' style="margin-right:6px" />Voice AI enabled</label></div>' +
+      '<div class="eg-form-row"><label>Voice number</label><input class="eg-input" id="egDetailVoiceNumber" value="' + esc(t.voice_number || "") + '" placeholder="+15551234567" /></div>' +
+      '<button class="eg-btn" id="egSaveChannels">Save channel settings</button>' +
       '<h3 style="margin-top:18px">Contact</h3>' +
       '<div class="eg-form-row"><label>Contact name</label><div class="eg-input" style="background:#f7f9fc">' + (t.contact_name ? esc(t.contact_name) : dash) + '</div></div>' +
       '<div class="eg-form-row"><label>Contact phone</label><div class="eg-input" style="background:#f7f9fc">' + (t.contact_phone ? esc(t.contact_phone) : dash) + '</div></div>' +
       '<div class="eg-form-row"><label>Website</label><div class="eg-input" style="background:#f7f9fc">' + (t.website ? ('<a href="' + esc(t.website) + '" target="_blank" rel="noopener">' + esc(t.website) + '</a>') : dash) + '</div></div>' +
+      '<div class="eg-small eg-muted">There is no contact email field on this resource - checked every admin endpoint (GET/PATCH tenant, GET tenants list, GET /api/v1/users). owner_email is only captured at client creation time and never stored back on the tenant record, so it can\'t be shown or edited here. Needs a backend field before this can be added.</div>' +
       '</div>' +
       '</div>' +
       channelSummaryHtml(t);
   }
 
-  // High-level per-channel usage/leads summary. There is no backend
-  // endpoint for this breakdown today (only GET/PATCH
-  // /api/v1/admin/tenants/{id} exist - checked openapi.json), and it
-  // shouldn't be computed here anyway: per-channel counts need to be
-  // aggregated from raw usage/lead rows the admin API doesn't expose to
-  // this page, and doing that client-side would mean silently guessing.
-  // openTenantDetail() optimistically calls GET
-  // /api/v1/admin/tenants/{id}/usage-summary; state.tenantUsageSummary
-  // stays null until that endpoint exists, and this renders honest
-  // placeholders until then. Total AI Interactions/Allowance is real
-  // either way (it's already on the tenant resource).
+  // High-level per-channel usage/leads summary, from GET
+  // /api/v1/admin/tenants/{id}/usage-summary (added to the backend after
+  // this page was first built - openTenantDetail() already called it
+  // optimistically in case it showed up, so it started working with no
+  // further frontend change). state.tenantUsageSummary still falls back to
+  // null defensively (e.g. a transient fetch failure) - the placeholder
+  // rendering below is that fallback, not the expected case anymore.
   function channelSummaryHtml(t){
     var s = state.tenantUsageSummary;
     var dash = '<span class="eg-small eg-muted">&mdash;</span>';
@@ -960,7 +937,7 @@
 
     var noteHtml = s
       ? '<div class="eg-small eg-muted" style="margin-top:10px">Per-channel breakdown from GET /api/v1/admin/tenants/{id}/usage-summary.</div>'
-      : '<div class="eg-small eg-muted" style="margin-top:10px">Per-channel AI interactions and leads captured need a backend usage-summary endpoint that doesn\'t exist yet, so those cells show &mdash; rather than a guess. Total AI Interactions / Allowance above is real (from the tenant record). This table will populate automatically once the backend adds GET /api/v1/admin/tenants/{id}/usage-summary.</div>';
+      : '<div class="eg-small eg-muted" style="margin-top:10px">Could not load the per-channel breakdown just now, so those cells show &mdash; rather than a guess. Total AI Interactions / Allowance above is still real (from the tenant record). Try reopening this client.</div>';
 
     return '<div class="eg-card" style="margin-top:16px">' +
       '<h3>Channel summary</h3>' +
@@ -1000,6 +977,28 @@
         })
         .catch(function(err){ showToast(err.message, true); })
         .then(function(){ saveBtn.disabled = false; saveBtn.textContent = "Save changes"; });
+    });
+
+    var saveChannelsBtn = document.getElementById("egSaveChannels");
+    if (saveChannelsBtn) saveChannelsBtn.addEventListener("click", function(){
+      var whatsappNumber = document.getElementById("egDetailWhatsappNumber").value.trim();
+      var voiceNumber = document.getElementById("egDetailVoiceNumber").value.trim();
+      var body = {
+        whatsapp_enabled: document.getElementById("egDetailWhatsappEnabled").checked,
+        whatsapp_number: whatsappNumber || null,
+        voice_enabled: document.getElementById("egDetailVoiceEnabled").checked,
+        voice_number: voiceNumber || null
+      };
+      saveChannelsBtn.disabled = true; saveChannelsBtn.textContent = "Saving...";
+      api("/api/v1/admin/tenants/" + state.tenantDetailId, { method: "PATCH", body: body })
+        .then(function(updated){
+          state.tenantDetail = updated;
+          if (state.tenants) state.tenants = state.tenants.map(function(x){ return x.id === updated.id ? updated : x; });
+          showToast("Channel settings updated");
+          render();
+        })
+        .catch(function(err){ showToast(err.message, true); })
+        .then(function(){ saveChannelsBtn.disabled = false; saveChannelsBtn.textContent = "Save channel settings"; });
     });
   }
 
