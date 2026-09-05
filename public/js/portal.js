@@ -41,10 +41,11 @@
     knowledgePage: 1,
     tenantsPage: 1,
     leadSearch: "",
-    leadDateFilter: "all",
+    leadDateFilter: "quarter",
     leadStatusFilter: "all",
     leadSourceFilter: "all",
-    contactSearch: ""
+    contactSearch: "",
+    contactDateFilter: "quarter"
   };
 
   function esc(s){
@@ -727,29 +728,52 @@
   // contact + lead detail (status change moved into the drawer instead of
   // an inline per-row dropdown - same underlying PATCH, just a less
   // cluttered table to match the mockup's plain columns).
-  function filteredLeads(){
+  // GET /api/v1/crm/leads and /crm/contacts take no query params - the
+  // backend returns every record for the tenant in one response, every
+  // time, full stop. There's no pagination or date-range support to ask
+  // for server-side, so at real scale (the "10,000 contacts a year from
+  // now" case) the fetch itself stays expensive no matter what the UI
+  // does - only a backend paginated/filtered list endpoint actually fixes
+  // that. What IS fixable here: not rendering everything at once. Default
+  // date filter is "quarter" (rolling 3 months) so the table itself never
+  // has to hold more than a few months of rows in the DOM; CSV export
+  // passes ignoreDateFilter so "just download it" always gets full
+  // history regardless of what's on screen, per the "download for
+  // anything older" strategy.
+  function withinDateFilter(dateStr, filterValue){
+    if (filterValue === "all") return true;
+    var d = new Date(dateStr);
+    var now = new Date();
+    if (filterValue === "month") return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+    if (filterValue === "quarter") return d.getTime() >= now.getTime() - 90 * 24 * 60 * 60 * 1000;
+    if (filterValue === "year") return d.getFullYear() === now.getFullYear();
+    return true;
+  }
+
+  function filteredLeads(opts){
+    opts = opts || {};
     var rows = joinedLeads();
     var q = (state.leadSearch || "").toLowerCase().trim();
-    var now = new Date();
     rows = rows.filter(function(r){
       var c = r.contact || {};
       var text = [contactName(c), c.email, c.phone, c.company, r.service_interest, r.title].filter(Boolean).join(" ").toLowerCase();
       if (q && text.indexOf(q) === -1) return false;
       if (state.leadStatusFilter !== "all" && r.status !== state.leadStatusFilter) return false;
       if (state.leadSourceFilter !== "all" && r.source !== state.leadSourceFilter) return false;
-      var d = new Date(r.created_at);
-      if (state.leadDateFilter === "month" && (d.getFullYear() !== now.getFullYear() || d.getMonth() !== now.getMonth())) return false;
-      if (state.leadDateFilter === "year" && d.getFullYear() !== now.getFullYear()) return false;
+      if (!opts.ignoreDateFilter && !withinDateFilter(r.created_at, state.leadDateFilter)) return false;
       return true;
     });
     return rows.sort(function(a, b){ return new Date(b.created_at) - new Date(a.created_at); });
   }
 
-  function filteredContacts(){
+  function filteredContacts(opts){
+    opts = opts || {};
     var q = (state.contactSearch || "").toLowerCase().trim();
     return (state.contacts || []).filter(function(c){
       var text = [contactName(c), c.email, c.phone, c.company].filter(Boolean).join(" ").toLowerCase();
-      return !q || text.indexOf(q) !== -1;
+      if (q && text.indexOf(q) === -1) return false;
+      if (!opts.ignoreDateFilter && !withinDateFilter(c.created_at, state.contactDateFilter)) return false;
+      return true;
     }).sort(function(a, b){ return new Date(b.created_at) - new Date(a.created_at); });
   }
 
@@ -770,13 +794,14 @@
     return '<div class="eg-card">' +
       '<div class="eg-toolbar">' +
       '<input id="egLeadSearch" placeholder="Search lead or contact..." value="' + esc(state.leadSearch) + '" />' +
-      '<select id="egLeadDateFilter">' + selOpts([{value:"all",label:"All time"},{value:"month",label:"This month"},{value:"year",label:"This year"}], state.leadDateFilter) + '</select>' +
+      '<select id="egLeadDateFilter">' + selOpts([{value:"month",label:"This month"},{value:"quarter",label:"This quarter"},{value:"year",label:"This year"},{value:"all",label:"All time"}], state.leadDateFilter) + '</select>' +
       '<select id="egLeadStatusFilter">' + selOpts(["all","new","contacted","qualified","booked","won","lost"].map(function(s){ return {value:s, label: s === "all" ? "All status" : s}; }), state.leadStatusFilter) + '</select>' +
       '<select id="egLeadSourceFilter">' + selOpts([{value:"all",label:"All sources"},{value:"website_form",label:"Website form"},{value:"website_chat",label:"Website chat"},{value:"whatsapp",label:"WhatsApp"},{value:"voice",label:"Voice"},{value:"manual",label:"Manual"}], state.leadSourceFilter) + '</select>' +
       '<button class="eg-btn" id="egDownloadLeadsCsv">Download Leads CSV</button>' +
       '</div>' +
-      (lrows ? '<table class="eg-table"><thead><tr><th>Lead</th><th>Interest</th><th>Source</th><th>Status</th><th>Priority</th><th>Last Activity</th><th>Created</th></tr></thead><tbody>' + lrows + '</tbody></table>' : '<div class="eg-empty">' + (state.leadSearch ? "No matching leads." : "No leads yet.") + '</div>') +
+      (lrows ? '<table class="eg-table"><thead><tr><th>Lead</th><th>Interest</th><th>Source</th><th>Status</th><th>Priority</th><th>Last Activity</th><th>Created</th></tr></thead><tbody>' + lrows + '</tbody></table>' : '<div class="eg-empty">' + (state.leadSearch ? "No matching leads." : "No leads in this period.") + '</div>') +
       pagerHtml("egLead", page, "leads") +
+      (state.leadDateFilter !== "all" ? '<div class="eg-small eg-muted" style="margin-top:10px">Only showing leads from the selected period. Older leads aren\'t deleted - switch to "All time" or use Download Leads CSV to get full history.</div>' : "") +
       '</div>';
   }
 
@@ -788,9 +813,14 @@
       return '<tr><td><b>' + esc(contactName(c)) + '</b></td><td>' + esc(c.email || "-") + '</td><td>' + esc(c.phone || "-") + '</td><td>' + esc(c.company || "-") + '</td><td>' + esc(c.preferred_channel || "-") + '</td><td class="eg-small eg-muted">' + fmtDate(c.last_interaction_at) + '</td><td class="eg-small eg-muted">' + fmtDate(c.created_at) + '</td></tr>';
     }).join("");
     return '<div class="eg-card">' +
-      '<div class="eg-toolbar"><input id="egContactSearch" placeholder="Search name, email, company..." value="' + esc(state.contactSearch) + '" /><button class="eg-btn" id="egDownloadContactsCsv">Download Contacts CSV</button></div>' +
-      (crows ? '<table class="eg-table"><thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Company</th><th>Preferred Channel</th><th>Last Interaction</th><th>Created</th></tr></thead><tbody>' + crows + '</tbody></table>' : '<div class="eg-empty">' + (state.contactSearch ? "No matching contacts." : "No contacts yet.") + '</div>') +
+      '<div class="eg-toolbar">' +
+      '<input id="egContactSearch" placeholder="Search name, email, company..." value="' + esc(state.contactSearch) + '" />' +
+      '<select id="egContactDateFilter">' + selOpts([{value:"month",label:"This month"},{value:"quarter",label:"This quarter"},{value:"year",label:"This year"},{value:"all",label:"All time"}], state.contactDateFilter) + '</select>' +
+      '<button class="eg-btn" id="egDownloadContactsCsv">Download Contacts CSV</button>' +
+      '</div>' +
+      (crows ? '<table class="eg-table"><thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Company</th><th>Preferred Channel</th><th>Last Interaction</th><th>Created</th></tr></thead><tbody>' + crows + '</tbody></table>' : '<div class="eg-empty">' + (state.contactSearch ? "No matching contacts." : "No contacts in this period.") + '</div>') +
       pagerHtml("egContact", page, "contacts") +
+      (state.contactDateFilter !== "all" ? '<div class="eg-small eg-muted" style="margin-top:10px">Only showing contacts created in the selected period. Older contacts aren\'t deleted - switch to "All time" or use Download Contacts CSV to get full history.</div>' : "") +
       '</div>';
   }
 
@@ -828,13 +858,19 @@
     if (contactSearch) contactSearch.addEventListener("input", function(){
       preserveFocus(function(){ state.contactSearch = contactSearch.value; state.contactPage = 1; render(); });
     });
+    var contactDateFilter = document.getElementById("egContactDateFilter");
+    if (contactDateFilter) contactDateFilter.addEventListener("change", function(){ state.contactDateFilter = contactDateFilter.value; state.contactPage = 1; render(); });
     bindPager("egLead", "leadPage");
     bindPager("egContact", "contactPage");
 
+    // CSV export deliberately ignores the on-screen date filter - it's the
+    // "full history" escape hatch for anything older than what's rendered
+    // (see the note above the table), so it always exports every record
+    // matching the search/status/source filters regardless of period.
     var dlLeadsBtn = document.getElementById("egDownloadLeadsCsv");
     if (dlLeadsBtn) dlLeadsBtn.addEventListener("click", function(){
       var header = ["Name","Email","Phone","Company","Interest","Source","Status","Priority","Last Activity","Created","Notes"];
-      var body = filteredLeads().map(function(r){
+      var body = filteredLeads({ ignoreDateFilter: true }).map(function(r){
         var c = r.contact || {};
         return [contactName(c), c.email, c.phone, c.company, r.service_interest || r.title, r.source, r.status, r.priority, r.last_activity_at, r.created_at, r.notes];
       });
@@ -843,7 +879,7 @@
     var dlContactsBtn = document.getElementById("egDownloadContactsCsv");
     if (dlContactsBtn) dlContactsBtn.addEventListener("click", function(){
       var header = ["Name","Email","Phone","Company","Job Title","Preferred Channel","Last Interaction","Created"];
-      var body = filteredContacts().map(function(c){
+      var body = filteredContacts({ ignoreDateFilter: true }).map(function(c){
         return [contactName(c), c.email, c.phone, c.company, c.job_title, c.preferred_channel, c.last_interaction_at, c.created_at];
       });
       downloadCsv("edgifynow-crm-contacts.csv", header, body);
@@ -851,6 +887,12 @@
   }
 
   // ---- Lead detail drawer ----
+  // There's no DELETE for leads (GET/PATCH only) - "Lost" + a reason is
+  // the only way to get bad/test/duplicate leads out of the way without
+  // deleting them. Note lost_reason is write-only: PATCH accepts it but
+  // GET /api/v1/crm/leads never returns it, so the field always starts
+  // blank here even if one was set previously - there's no way to show
+  // what it currently is from this API.
   function leadDrawerHtml(){
     if (!state.leadDrawerId) return "";
     var r = joinedLeads().filter(function(x){ return x.id === state.leadDrawerId; })[0];
@@ -879,6 +921,10 @@
       '<div class="eg-kv"><span>Last activity</span><b>' + fmtDate(r.last_activity_at) + '</b></div>' +
       '<h4>Status</h4>' +
       '<div class="eg-form-row">' + statusSelect + '</div>' +
+      '<div class="eg-form-row" id="egDrawerLostReasonRow"' + (r.status === "lost" ? "" : " hidden") + '>' +
+      '<label>Reason <span class="eg-small eg-muted">(use "Lost" + a reason like "Test/dummy data" to get bad leads out of the way without deleting - there\'s no delete endpoint for leads)</span></label>' +
+      '<input class="eg-input" id="egDrawerLostReason" placeholder="Not interested, duplicate, test data, etc." />' +
+      '</div>' +
       '<button class="eg-btn" id="egDrawerSaveStatus">Save status</button>' +
       '<h4>Notes</h4>' +
       '<div style="line-height:1.55">' + (r.notes ? esc(r.notes) : '<span class="eg-muted">-</span>') + '</div>' +
@@ -915,12 +961,22 @@
     if (backdrop) backdrop.addEventListener("click", function(){ state.leadDrawerId = null; state.leadAppointments = null; render(); });
     var closeBtn = document.getElementById("egDrawerClose");
     if (closeBtn) closeBtn.addEventListener("click", function(){ state.leadDrawerId = null; state.leadAppointments = null; render(); });
+    var statusSelectEl = document.getElementById("egDrawerStatus");
+    var lostReasonRow = document.getElementById("egDrawerLostReasonRow");
+    if (statusSelectEl && lostReasonRow) {
+      statusSelectEl.addEventListener("change", function(){ lostReasonRow.hidden = statusSelectEl.value !== "lost"; });
+    }
     var saveBtn = document.getElementById("egDrawerSaveStatus");
     if (saveBtn) saveBtn.addEventListener("click", function(){
       var id = state.leadDrawerId;
       var newStatus = document.getElementById("egDrawerStatus").value;
+      var body = { status: newStatus };
+      if (newStatus === "lost") {
+        var reasonInput = document.getElementById("egDrawerLostReason");
+        body.lost_reason = reasonInput ? (reasonInput.value.trim() || null) : null;
+      }
       saveBtn.disabled = true; saveBtn.textContent = "Saving...";
-      api("/api/v1/crm/leads/" + id, { method: "PATCH", body: { status: newStatus } })
+      api("/api/v1/crm/leads/" + id, { method: "PATCH", body: body })
         .then(function(updated){
           state.leads = (state.leads || []).map(function(l){ return l.id === updated.id ? updated : l; });
           showToast("Lead updated");
