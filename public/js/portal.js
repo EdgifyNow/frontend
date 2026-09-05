@@ -36,6 +36,10 @@
     leadAppointments: null,
     apiKeys: null,
     newApiKeyReveal: null,
+    leadPage: 1,
+    contactPage: 1,
+    knowledgePage: 1,
+    tenantsPage: 1,
     leadSearch: "",
     leadDateFilter: "all",
     leadStatusFilter: "all",
@@ -114,6 +118,33 @@
     var a = document.createElement("a");
     a.href = url; a.download = filename; a.click();
     URL.revokeObjectURL(url);
+  }
+  // Shared client-side pagination for any listing built from an array
+  // already fully loaded (leads/contacts/documents/clients) - no backend
+  // paging endpoint needed for these list sizes.
+  var EG_PAGE_SIZE = 10;
+  function paginate(items, page, pageSize){
+    pageSize = pageSize || EG_PAGE_SIZE;
+    var totalPages = Math.max(1, Math.ceil(items.length / pageSize));
+    var clampedPage = Math.min(Math.max(page, 1), totalPages);
+    var start = (clampedPage - 1) * pageSize;
+    return { pageItems: items.slice(start, start + pageSize), page: clampedPage, totalPages: totalPages, total: items.length };
+  }
+  function pagerHtml(idPrefix, pageInfo, noun){
+    if (!pageInfo.total) return "";
+    return '<div class="eg-row" style="margin-top:12px">' +
+      '<div class="eg-small eg-muted">Showing ' + pageInfo.pageItems.length + ' of ' + pageInfo.total + ' ' + esc(noun) + '</div>' +
+      '<div style="display:flex;gap:6px;align-items:center">' +
+      '<button class="eg-btn ghost" style="padding:6px 10px" id="' + idPrefix + 'Prev"' + (pageInfo.page <= 1 ? " disabled" : "") + '>&lsaquo;</button>' +
+      '<span class="eg-pill">' + pageInfo.page + ' / ' + pageInfo.totalPages + '</span>' +
+      '<button class="eg-btn ghost" style="padding:6px 10px" id="' + idPrefix + 'Next"' + (pageInfo.page >= pageInfo.totalPages ? " disabled" : "") + '>&rsaquo;</button>' +
+      '</div></div>';
+  }
+  function bindPager(idPrefix, stateKey){
+    var prev = document.getElementById(idPrefix + "Prev");
+    if (prev) prev.addEventListener("click", function(){ state[stateKey] -= 1; render(); });
+    var next = document.getElementById(idPrefix + "Next");
+    if (next) next.addEventListener("click", function(){ state[stateKey] += 1; render(); });
   }
   function slugify(s){
     return String(s || "").toLowerCase().trim()
@@ -724,8 +755,9 @@
 
   function leadsTabHtml(){
     if (!state.leads || !state.contacts) return '<div class="eg-card"><div class="eg-empty">Loading leads...</div></div>';
-    var rows = filteredLeads();
-    var lrows = rows.map(function(r){
+    var filtered = filteredLeads();
+    var page = paginate(filtered, state.leadPage);
+    var lrows = page.pageItems.map(function(r){
       return '<tr class="eg-clickrow" style="cursor:pointer" data-lead-drawer="' + esc(r.id) + '">' +
         '<td><b>' + esc(contactName(r.contact)) + '</b></td>' +
         '<td>' + esc(r.service_interest || r.title || "-") + '</td>' +
@@ -743,19 +775,22 @@
       '<select id="egLeadSourceFilter">' + selOpts([{value:"all",label:"All sources"},{value:"website_form",label:"Website form"},{value:"website_chat",label:"Website chat"},{value:"whatsapp",label:"WhatsApp"},{value:"voice",label:"Voice"},{value:"manual",label:"Manual"}], state.leadSourceFilter) + '</select>' +
       '<button class="eg-btn" id="egDownloadLeadsCsv">Download Leads CSV</button>' +
       '</div>' +
-      (lrows ? '<table class="eg-table"><thead><tr><th>Lead</th><th>Interest</th><th>Source</th><th>Status</th><th>Priority</th><th>Last Activity</th><th>Created</th></tr></thead><tbody>' + lrows + '</tbody></table>' : '<div class="eg-empty">No matching leads.</div>') +
+      (lrows ? '<table class="eg-table"><thead><tr><th>Lead</th><th>Interest</th><th>Source</th><th>Status</th><th>Priority</th><th>Last Activity</th><th>Created</th></tr></thead><tbody>' + lrows + '</tbody></table>' : '<div class="eg-empty">' + (state.leadSearch ? "No matching leads." : "No leads yet.") + '</div>') +
+      pagerHtml("egLead", page, "leads") +
       '</div>';
   }
 
   function contactsTabHtml(){
     if (!state.contacts) return '<div class="eg-card"><div class="eg-empty">Loading contacts...</div></div>';
-    var rows = filteredContacts();
-    var crows = rows.map(function(c){
+    var filtered = filteredContacts();
+    var page = paginate(filtered, state.contactPage);
+    var crows = page.pageItems.map(function(c){
       return '<tr><td><b>' + esc(contactName(c)) + '</b></td><td>' + esc(c.email || "-") + '</td><td>' + esc(c.phone || "-") + '</td><td>' + esc(c.company || "-") + '</td><td>' + esc(c.preferred_channel || "-") + '</td><td class="eg-small eg-muted">' + fmtDate(c.last_interaction_at) + '</td><td class="eg-small eg-muted">' + fmtDate(c.created_at) + '</td></tr>';
     }).join("");
     return '<div class="eg-card">' +
       '<div class="eg-toolbar"><input id="egContactSearch" placeholder="Search name, email, company..." value="' + esc(state.contactSearch) + '" /><button class="eg-btn" id="egDownloadContactsCsv">Download Contacts CSV</button></div>' +
-      (crows ? '<table class="eg-table"><thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Company</th><th>Preferred Channel</th><th>Last Interaction</th><th>Created</th></tr></thead><tbody>' + crows + '</tbody></table>' : '<div class="eg-empty">No matching contacts.</div>') +
+      (crows ? '<table class="eg-table"><thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Company</th><th>Preferred Channel</th><th>Last Interaction</th><th>Created</th></tr></thead><tbody>' + crows + '</tbody></table>' : '<div class="eg-empty">' + (state.contactSearch ? "No matching contacts." : "No contacts yet.") + '</div>') +
+      pagerHtml("egContact", page, "contacts") +
       '</div>';
   }
 
@@ -781,18 +816,20 @@
 
     var leadSearch = document.getElementById("egLeadSearch");
     if (leadSearch) leadSearch.addEventListener("input", function(){
-      preserveFocus(function(){ state.leadSearch = leadSearch.value; render(); });
+      preserveFocus(function(){ state.leadSearch = leadSearch.value; state.leadPage = 1; render(); });
     });
     var dateFilter = document.getElementById("egLeadDateFilter");
-    if (dateFilter) dateFilter.addEventListener("change", function(){ state.leadDateFilter = dateFilter.value; render(); });
+    if (dateFilter) dateFilter.addEventListener("change", function(){ state.leadDateFilter = dateFilter.value; state.leadPage = 1; render(); });
     var statusFilter = document.getElementById("egLeadStatusFilter");
-    if (statusFilter) statusFilter.addEventListener("change", function(){ state.leadStatusFilter = statusFilter.value; render(); });
+    if (statusFilter) statusFilter.addEventListener("change", function(){ state.leadStatusFilter = statusFilter.value; state.leadPage = 1; render(); });
     var sourceFilter = document.getElementById("egLeadSourceFilter");
-    if (sourceFilter) sourceFilter.addEventListener("change", function(){ state.leadSourceFilter = sourceFilter.value; render(); });
+    if (sourceFilter) sourceFilter.addEventListener("change", function(){ state.leadSourceFilter = sourceFilter.value; state.leadPage = 1; render(); });
     var contactSearch = document.getElementById("egContactSearch");
     if (contactSearch) contactSearch.addEventListener("input", function(){
-      preserveFocus(function(){ state.contactSearch = contactSearch.value; render(); });
+      preserveFocus(function(){ state.contactSearch = contactSearch.value; state.contactPage = 1; render(); });
     });
+    bindPager("egLead", "leadPage");
+    bindPager("egContact", "contactPage");
 
     var dlLeadsBtn = document.getElementById("egDownloadLeadsCsv");
     if (dlLeadsBtn) dlLeadsBtn.addEventListener("click", function(){
@@ -909,10 +946,12 @@
   function knowledgeHtml(){
     var docs = state.documents;
     var body = "";
+    var pager = "";
     if (!docs) body = '<div class="eg-empty">Loading documents...</div>';
     else if (!docs.length) body = '<div class="eg-empty">No documents uploaded yet.</div>';
     else {
-      var rows = docs.map(function(d){
+      var page = paginate(docs, state.knowledgePage);
+      var rows = page.pageItems.map(function(d){
         var pillCls = "eg-pill";
         if (d.status === "indexed") pillCls += " green";
         else if (d.status === "processing" || d.status === "pending") pillCls += " amber";
@@ -925,10 +964,12 @@
           '</span></div>';
       }).join("");
       body = '<div class="eg-list">' + rows + '</div>';
+      pager = pagerHtml("egKnowledge", page, "documents");
     }
     return '<div class="eg-card">' +
       '<div class="eg-row"><h3>Documents</h3><label class="eg-btn" style="cursor:pointer">Upload document<input type="file" id="egFileInput" accept=".pdf,.doc,.docx" style="display:none" /></label></div>' +
       body +
+      pager +
       '<div id="egUploadStatus" class="eg-small eg-muted" style="margin-top:10px"></div>' +
       '</div>';
   }
@@ -966,6 +1007,7 @@
         downloadDocument(id, el);
       });
     });
+    bindPager("egKnowledge", "knowledgePage");
   }
 
   // Document downloads are authenticated (the API requires the same Bearer
@@ -1140,7 +1182,8 @@
     if (!tenants) listHtml = '<div class="eg-empty">Loading clients...</div>';
     else if (!tenants.length) listHtml = '<div class="eg-empty">No clients yet.</div>';
     else {
-      var rows = tenants.map(function(t){
+      var page = paginate(tenants, state.tenantsPage);
+      var rows = page.pageItems.map(function(t){
         var allowance = t.ai_usage_allowance;
         var used = t.ai_usage_current_period || 0;
         var usageHtml = allowance
@@ -1154,6 +1197,7 @@
           '<td class="eg-small eg-muted">' + fmtDate(t.created_at) + '</td></tr>';
       }).join("");
       listHtml = '<table class="eg-table"><thead><tr><th>Name</th><th>Status</th><th>Package</th><th>Usage / Allowance</th><th>Created</th></tr></thead><tbody>' + rows + '</tbody></table>' +
+        pagerHtml("egTenants", page, "clients") +
         '<div class="eg-small eg-muted" style="margin-top:10px">Click a row to view or edit full client details.</div>';
     }
 
@@ -1178,6 +1222,7 @@
     document.querySelectorAll("[data-tenant-id]").forEach(function(row){
       row.addEventListener("click", function(){ openTenantDetail(row.getAttribute("data-tenant-id")); });
     });
+    bindPager("egTenants", "tenantsPage");
 
     var slugInput = document.getElementById("egTenantSlug");
     var contactNameInput = document.getElementById("egContactName");
