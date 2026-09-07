@@ -51,7 +51,12 @@
     voiceSearch: "",
     voiceStatusFilter: "all",
     voiceDrawerId: null,
-    voiceDrawerDetail: null
+    voiceDrawerDetail: null,
+    whatsappCaptures: null,
+    whatsappSearch: "",
+    whatsappStatusFilter: "all",
+    whatsappDrawerId: null,
+    whatsappDrawerDetail: null
   };
 
   function esc(s){
@@ -352,29 +357,9 @@
     if (v === "tenants") ensureTenants();
     if (v === "demo") { ensureAssistants(); ensureDocuments(); }
     if (v === "integrations") ensureApiKeys();
-    if (v === "voice") loadVoiceCaptures();
+    if (v === "voice") loadChannelCaptures(CHANNEL_ACTIVITY.voice);
+    if (v === "whatsapp") loadChannelCaptures(CHANNEL_ACTIVITY.whatsapp);
     render();
-  }
-
-  function loadVoiceCaptures(){
-    var params = new URLSearchParams();
-    if (state.voiceStatusFilter !== "all") params.set("status_filter", state.voiceStatusFilter);
-    if (state.voiceSearch) params.set("search", state.voiceSearch);
-    var qs = params.toString();
-    api("/api/v1/crm/voice-captures" + (qs ? "?" + qs : "")).then(function(d){
-      state.voiceCaptures = d;
-      render();
-    }).catch(function(err){ showToast(err.message, true); });
-  }
-
-  function openVoiceDrawer(id){
-    state.voiceDrawerId = id;
-    state.voiceDrawerDetail = null;
-    render();
-    api("/api/v1/crm/voice-captures/" + id).then(function(d){
-      state.voiceDrawerDetail = d;
-      render();
-    }).catch(function(err){ showToast(err.message, true); });
   }
 
   // ---------- RENDER ----------
@@ -441,6 +426,9 @@
     if (state.tenantSelf && state.tenantSelf.voice_enabled) {
       items.splice(3, 0, { id: "voice", label: "Voice Activity", icon: "☎" });
     }
+    if (state.tenantSelf && state.tenantSelf.whatsapp_enabled) {
+      items.splice(3, 0, { id: "whatsapp", label: "WhatsApp Activity", icon: "◆" });
+    }
     return items;
   }
 
@@ -475,7 +463,7 @@
       '</div>' +
       '<div id="egContent"></div>' +
       '</main>' +
-      '</div>' + toastHtml + leadDrawerHtml() + voiceDrawerHtml();
+      '</div>' + toastHtml + leadDrawerHtml() + voiceDrawerHtml() + whatsappDrawerHtml();
 
     document.querySelectorAll("[data-nav]").forEach(function(el){
       el.addEventListener("click", function(){
@@ -485,7 +473,7 @@
       });
     });
     bindDrawer();
-    bindVoiceDrawer();
+    bindAllChannelDrawers();
 
     renderContent();
   }
@@ -500,6 +488,7 @@
     if (state.view === "demo") return "Instant Demo";
     if (state.view === "integrations") return "Integrations";
     if (state.view === "voice") return "Voice Activity";
+    if (state.view === "whatsapp") return "WhatsApp Activity";
     return "";
   }
   function viewSub(){
@@ -512,6 +501,7 @@
     if (state.view === "demo") return "Upload a document and get a live AI answer, right now.";
     if (state.view === "integrations") return "Generate a widget key to embed your assistant on your website.";
     if (state.view === "voice") return "Live calls, orders, and appointments captured by your voice assistant.";
+    if (state.view === "whatsapp") return "Live orders, appointments, and leads captured over WhatsApp.";
     return "";
   }
 
@@ -527,6 +517,7 @@
     if (state.view === "demo") { el.innerHTML = demoHtml(); bindDemo(); return; }
     if (state.view === "integrations") { el.innerHTML = integrationsHtml(); bindIntegrations(); return; }
     if (state.view === "voice") { el.innerHTML = voiceHtml(); bindVoice(); return; }
+    if (state.view === "whatsapp") { el.innerHTML = whatsappHtml(); bindWhatsapp(); return; }
   }
 
   // ---- Dashboard ----
@@ -930,43 +921,88 @@
     });
   }
 
-  // ---- Voice Activity (real-time operational dashboard, not a usage
-  // report - each captured call is a business outcome, order/appointment/
-  // lead/general inquiry, moving through a status workflow) ----
-  var VOICE_STATUS_COLOR = { new: "gray", in_progress: "green", ready: "amber", completed: "blue", cancelled: "red" };
-  var VOICE_STATUS_OPTIONS = ["new", "in_progress", "ready", "completed", "cancelled"];
+  // ---- Channel Activity (real-time operational dashboards, not a usage
+  // report - each captured call/message is a business outcome,
+  // order/appointment/lead/general inquiry, moving through a status
+  // workflow). Voice and WhatsApp share this exact implementation,
+  // distinguished only by which channel they ask the backend for
+  // (GET /crm/voice-captures?channel=voice|whatsapp) - the backend keeps
+  // both in the same table, split by the conversation's own channel.
+  var CHANNEL_STATUS_COLOR = { new: "gray", in_progress: "green", ready: "amber", completed: "blue", cancelled: "red" };
+  var CHANNEL_STATUS_OPTIONS = ["new", "in_progress", "ready", "completed", "cancelled"];
 
-  function voiceStatusLabel(s){
+  var CHANNEL_ACTIVITY = {
+    voice: {
+      key: "voice",
+      captures: "voiceCaptures", search: "voiceSearch", statusFilter: "voiceStatusFilter",
+      drawerId: "voiceDrawerId", drawerDetail: "voiceDrawerDetail",
+      idPrefix: "egVoice", contactLabel: "Caller",
+      emptyMessage: "No voice activity yet. Once your assistant takes a call, captured orders, appointments, and leads will show up here.",
+      showTranscript: true
+    },
+    whatsapp: {
+      key: "whatsapp",
+      captures: "whatsappCaptures", search: "whatsappSearch", statusFilter: "whatsappStatusFilter",
+      drawerId: "whatsappDrawerId", drawerDetail: "whatsappDrawerDetail",
+      idPrefix: "egWhatsapp", contactLabel: "Contact",
+      emptyMessage: "No WhatsApp activity yet. Once your assistant captures an order, appointment, or lead over WhatsApp, it will show up here.",
+      showTranscript: false
+    }
+  };
+
+  function channelStatusLabel(s){
     return String(s || "").split("_").map(function(w){ return w.charAt(0).toUpperCase() + w.slice(1); }).join(" ");
   }
-  function voiceTypeLabel(t){
+  function channelTypeLabel(t){
     return String(t || "").split("_").map(function(w){ return w.charAt(0).toUpperCase() + w.slice(1); }).join(" ");
   }
 
-  function voiceHtml(){
-    var statusOptions = ["all"].concat(VOICE_STATUS_OPTIONS);
+  function loadChannelCaptures(cfg){
+    var params = new URLSearchParams();
+    params.set("channel", cfg.key);
+    if (state[cfg.statusFilter] !== "all") params.set("status_filter", state[cfg.statusFilter]);
+    if (state[cfg.search]) params.set("search", state[cfg.search]);
+    api("/api/v1/crm/voice-captures?" + params.toString()).then(function(d){
+      state[cfg.captures] = d;
+      render();
+    }).catch(function(err){ showToast(err.message, true); });
+  }
+
+  function openChannelDrawer(cfg, id){
+    state[cfg.drawerId] = id;
+    state[cfg.drawerDetail] = null;
+    render();
+    api("/api/v1/crm/voice-captures/" + id).then(function(d){
+      state[cfg.drawerDetail] = d;
+      render();
+    }).catch(function(err){ showToast(err.message, true); });
+  }
+
+  function channelActivityHtml(cfg){
+    var statusOptions = ["all"].concat(CHANNEL_STATUS_OPTIONS);
     var filters =
       '<div class="eg-row" style="margin-bottom:14px;gap:10px;flex-wrap:wrap">' +
-      '<input class="eg-input" id="egVoiceSearch" placeholder="Search name, phone, or summary..." style="max-width:280px" value="' + esc(state.voiceSearch) + '" />' +
-      '<select class="eg-select" id="egVoiceStatusFilter" style="width:auto">' +
+      '<input class="eg-input" id="' + cfg.idPrefix + 'Search" placeholder="Search name, phone, or summary..." style="max-width:280px" value="' + esc(state[cfg.search]) + '" />' +
+      '<select class="eg-select" id="' + cfg.idPrefix + 'StatusFilter" style="width:auto">' +
       statusOptions.map(function(s){
-        return '<option value="' + s + '"' + (s === state.voiceStatusFilter ? " selected" : "") + '>' + (s === "all" ? "All statuses" : voiceStatusLabel(s)) + '</option>';
+        return '<option value="' + s + '"' + (s === state[cfg.statusFilter] ? " selected" : "") + '>' + (s === "all" ? "All statuses" : channelStatusLabel(s)) + '</option>';
       }).join("") +
       '</select>' +
       '</div>';
 
-    if (state.voiceCaptures === null) return filters + '<div class="eg-small eg-muted">Loading...</div>';
-    if (!state.voiceCaptures.length) return filters + '<div class="eg-card"><div class="eg-small eg-muted">No voice activity yet. Once your assistant takes a call, captured orders, appointments, and leads will show up here.</div></div>';
+    var captures = state[cfg.captures];
+    if (captures === null) return filters + '<div class="eg-small eg-muted">Loading...</div>';
+    if (!captures.length) return filters + '<div class="eg-card"><div class="eg-small eg-muted">' + esc(cfg.emptyMessage) + '</div></div>';
 
-    var tiles = state.voiceCaptures.map(function(v){
-      var color = VOICE_STATUS_COLOR[v.status] || "gray";
-      return '<div class="eg-vtile ' + color + '" data-voice-drawer="' + esc(v.id) + '">' +
+    var tiles = captures.map(function(v){
+      var color = CHANNEL_STATUS_COLOR[v.status] || "gray";
+      return '<div class="eg-vtile ' + color + '" data-channel-drawer="' + cfg.key + '" data-channel-drawer-id="' + esc(v.id) + '">' +
         '<div class="eg-vtile-top">' +
-        '<div><div class="eg-vtile-name">' + esc(v.contact.name || "Unknown caller") + '</div>' +
+        '<div><div class="eg-vtile-name">' + esc(v.contact.name || "Unknown") + '</div>' +
         '<div class="eg-vtile-phone">' + esc(v.contact.phone || "-") + '</div></div>' +
-        '<span class="eg-pill ' + color + '">' + voiceStatusLabel(v.status) + '</span>' +
+        '<span class="eg-pill ' + color + '">' + channelStatusLabel(v.status) + '</span>' +
         '</div>' +
-        '<span class="eg-tag">' + esc(voiceTypeLabel(v.capture_type)) + '</span>' +
+        '<span class="eg-tag">' + esc(channelTypeLabel(v.capture_type)) + '</span>' +
         '<div class="eg-vtile-summary">' + esc(v.summary) + '</div>' +
         '<div class="eg-vtile-time">' + fmtDate(v.created_at) + '</div>' +
         '</div>';
@@ -975,47 +1011,52 @@
     return filters + '<div class="eg-tilegrid">' + tiles + '</div>';
   }
 
-  function bindVoice(){
-    var search = document.getElementById("egVoiceSearch");
+  function bindChannelActivity(cfg){
+    var search = document.getElementById(cfg.idPrefix + "Search");
     if (search) search.addEventListener("input", function(){
-      preserveFocus(function(){ state.voiceSearch = search.value; });
-      clearTimeout(state._voiceSearchDebounce);
-      state._voiceSearchDebounce = setTimeout(loadVoiceCaptures, 300);
+      preserveFocus(function(){ state[cfg.search] = search.value; });
+      clearTimeout(state["_" + cfg.key + "SearchDebounce"]);
+      state["_" + cfg.key + "SearchDebounce"] = setTimeout(function(){ loadChannelCaptures(cfg); }, 300);
     });
-    var statusFilter = document.getElementById("egVoiceStatusFilter");
-    if (statusFilter) statusFilter.addEventListener("change", function(){
-      state.voiceStatusFilter = statusFilter.value;
-      loadVoiceCaptures();
+    var statusFilterEl = document.getElementById(cfg.idPrefix + "StatusFilter");
+    if (statusFilterEl) statusFilterEl.addEventListener("change", function(){
+      state[cfg.statusFilter] = statusFilterEl.value;
+      loadChannelCaptures(cfg);
     });
-    document.querySelectorAll("[data-voice-drawer]").forEach(function(el){
-      el.addEventListener("click", function(){ openVoiceDrawer(el.getAttribute("data-voice-drawer")); });
+    document.querySelectorAll('[data-channel-drawer="' + cfg.key + '"]').forEach(function(el){
+      el.addEventListener("click", function(){ openChannelDrawer(cfg, el.getAttribute("data-channel-drawer-id")); });
     });
   }
 
-  function voiceDrawerHtml(){
-    if (!state.voiceDrawerId) return "";
-    var d = state.voiceDrawerDetail;
+  function channelDrawerHtml(cfg){
+    if (!state[cfg.drawerId]) return "";
+    var d = state[cfg.drawerDetail];
+    var backdropId = cfg.idPrefix + "DrawerBackdrop";
     if (!d) {
-      return '<div class="eg-drawer-backdrop open" id="egVoiceDrawerBackdrop"></div>' +
+      return '<div class="eg-drawer-backdrop open" id="' + backdropId + '"></div>' +
         '<aside class="eg-drawer open"><div class="eg-small eg-muted">Loading...</div></aside>';
     }
-    var statusSelect = '<select class="eg-select" id="egVoiceDrawerStatus">' + VOICE_STATUS_OPTIONS.map(function(s){
-      return '<option value="' + s + '"' + (s === d.status ? " selected" : "") + '>' + voiceStatusLabel(s) + '</option>';
+    var statusSelect = '<select class="eg-select" id="' + cfg.idPrefix + 'DrawerStatus">' + CHANNEL_STATUS_OPTIONS.map(function(s){
+      return '<option value="' + s + '"' + (s === d.status ? " selected" : "") + '>' + channelStatusLabel(s) + '</option>';
     }).join("") + '</select>';
 
-    var transcriptHtml = !d.transcript.length
-      ? '<div class="eg-small eg-muted">No transcript available.</div>'
-      : d.transcript.map(function(m){
-          return '<div style="margin-bottom:10px"><b class="eg-small">' + esc(m.role === "assistant" ? "Assistant" : "Caller") + '</b>' +
-            '<div style="font-size:13px;line-height:1.5">' + esc(m.content) + '</div></div>';
-        }).join("");
+    var transcriptSection = "";
+    if (cfg.showTranscript) {
+      var transcriptHtml = !d.transcript.length
+        ? '<div class="eg-small eg-muted">No transcript available.</div>'
+        : d.transcript.map(function(m){
+            return '<div style="margin-bottom:10px"><b class="eg-small">' + esc(m.role === "assistant" ? "Assistant" : cfg.contactLabel) + '</b>' +
+              '<div style="font-size:13px;line-height:1.5">' + esc(m.content) + '</div></div>';
+          }).join("");
+      transcriptSection = '<h4>Transcript</h4>' + transcriptHtml;
+    }
 
-    return '<div class="eg-drawer-backdrop open" id="egVoiceDrawerBackdrop"></div>' +
+    return '<div class="eg-drawer-backdrop open" id="' + backdropId + '"></div>' +
       '<aside class="eg-drawer open">' +
-      '<button class="eg-drawer-close" id="egVoiceDrawerClose" aria-label="Close">&times;</button>' +
-      '<h2>' + esc(d.contact.name || "Unknown caller") + '</h2>' +
-      '<div class="eg-drawer-sub">' + esc(voiceTypeLabel(d.capture_type)) + '</div>' +
-      '<h4>Caller</h4>' +
+      '<button class="eg-drawer-close" id="' + cfg.idPrefix + 'DrawerClose" aria-label="Close">&times;</button>' +
+      '<h2>' + esc(d.contact.name || "Unknown") + '</h2>' +
+      '<div class="eg-drawer-sub">' + esc(channelTypeLabel(d.capture_type)) + '</div>' +
+      '<h4>' + esc(cfg.contactLabel) + '</h4>' +
       '<div class="eg-kv"><span>Phone</span><b>' + esc(d.contact.phone || "-") + '</b></div>' +
       '<div class="eg-kv"><span>Email</span><b>' + esc(d.contact.email || "-") + '</b></div>' +
       '<div class="eg-kv"><span>Received</span><b>' + fmtDate(d.created_at) + '</b></div>' +
@@ -1028,30 +1069,41 @@
         : "") +
       '<h4>Status</h4>' +
       '<div class="eg-form-row">' + statusSelect + '</div>' +
-      '<button class="eg-btn" id="egVoiceDrawerSaveStatus">Save status</button>' +
-      '<h4>Transcript</h4>' +
-      transcriptHtml +
+      '<button class="eg-btn" id="' + cfg.idPrefix + 'DrawerSaveStatus">Save status</button>' +
+      transcriptSection +
       '</aside>';
   }
 
-  function bindVoiceDrawer(){
-    var backdrop = document.getElementById("egVoiceDrawerBackdrop");
-    if (backdrop) backdrop.addEventListener("click", function(){ state.voiceDrawerId = null; state.voiceDrawerDetail = null; render(); });
-    var closeBtn = document.getElementById("egVoiceDrawerClose");
-    if (closeBtn) closeBtn.addEventListener("click", function(){ state.voiceDrawerId = null; state.voiceDrawerDetail = null; render(); });
-    var saveBtn = document.getElementById("egVoiceDrawerSaveStatus");
+  function bindChannelDrawer(cfg){
+    var backdrop = document.getElementById(cfg.idPrefix + "DrawerBackdrop");
+    if (backdrop) backdrop.addEventListener("click", function(){ state[cfg.drawerId] = null; state[cfg.drawerDetail] = null; render(); });
+    var closeBtn = document.getElementById(cfg.idPrefix + "DrawerClose");
+    if (closeBtn) closeBtn.addEventListener("click", function(){ state[cfg.drawerId] = null; state[cfg.drawerDetail] = null; render(); });
+    var saveBtn = document.getElementById(cfg.idPrefix + "DrawerSaveStatus");
     if (saveBtn) saveBtn.addEventListener("click", function(){
-      var newStatus = document.getElementById("egVoiceDrawerStatus").value;
+      var newStatus = document.getElementById(cfg.idPrefix + "DrawerStatus").value;
+      var drawerId = state[cfg.drawerId];
       saveBtn.disabled = true;
-      api("/api/v1/crm/voice-captures/" + state.voiceDrawerId, { method: "PATCH", body: { status: newStatus } })
+      api("/api/v1/crm/voice-captures/" + drawerId, { method: "PATCH", body: { status: newStatus } })
         .then(function(){
           showToast("Status updated");
-          if (state.voiceCaptures) loadVoiceCaptures();
-          openVoiceDrawer(state.voiceDrawerId);
+          if (state[cfg.captures]) loadChannelCaptures(cfg);
+          openChannelDrawer(cfg, drawerId);
         })
         .catch(function(err){ showToast(err.message, true); })
         .then(function(){ saveBtn.disabled = false; });
     });
+  }
+
+  function voiceHtml(){ return channelActivityHtml(CHANNEL_ACTIVITY.voice); }
+  function bindVoice(){ bindChannelActivity(CHANNEL_ACTIVITY.voice); }
+  function voiceDrawerHtml(){ return channelDrawerHtml(CHANNEL_ACTIVITY.voice); }
+  function whatsappHtml(){ return channelActivityHtml(CHANNEL_ACTIVITY.whatsapp); }
+  function bindWhatsapp(){ bindChannelActivity(CHANNEL_ACTIVITY.whatsapp); }
+  function whatsappDrawerHtml(){ return channelDrawerHtml(CHANNEL_ACTIVITY.whatsapp); }
+  function bindAllChannelDrawers(){
+    bindChannelDrawer(CHANNEL_ACTIVITY.voice);
+    bindChannelDrawer(CHANNEL_ACTIVITY.whatsapp);
   }
 
   // ---- Lead detail drawer ----
