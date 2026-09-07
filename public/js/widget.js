@@ -3,20 +3,21 @@
   var CONV_KEY = "eg_widget_conversation_id";
   var root = document.getElementById("wgRoot");
 
-  // The widget key is read from the URL and used only as a request header.
-  // This code never renders it into the DOM and never console.logs it. Note
-  // that's not the same as "never appears anywhere" -- as a query-string
-  // value it can still show up in browser history or a web server's access
-  // logs, which is inherent to URLs in general, not something this file can
-  // prevent. It's a public, tenant-scoped key (same trust model as a Stripe
-  // publishable key), not a secret that would be dangerous if it leaked
-  // that way -- see README "Embedding the widget" for the full reasoning.
+  // The widget is identified by a public, non-secret client id (?client=...
+  // in the URL, e.g. bright-path-tutoring), never by the permanent key
+  // itself. This code exchanges that id for a short-lived session token
+  // (see bootstrapThenLoadBranding below) and uses only that token as the
+  // request header from then on. ?key=... is still accepted as a fallback
+  // for any embed still using the older, permanent-key link, so nothing
+  // already deployed that way stops working.
+  var WIDGET_CLIENT_ID = new URLSearchParams(location.search).get("client") || "";
   var WIDGET_KEY = new URLSearchParams(location.search).get("key") || "";
 
   var state = {
     open: false,
     booting: true,
-    keyMissing: !WIDGET_KEY,
+    keyMissing: !WIDGET_KEY && !WIDGET_CLIENT_ID,
+    bootstrapError: null,
     branding: null,
     brandingError: null,
     messages: [],
@@ -156,7 +157,12 @@
     var closeBtnHtml = '<button class="wg-close" id="wgClose" aria-label="Close chat">&times;</button>';
 
     if (state.keyMissing) {
-      root.innerHTML = '<div class="wg-window"><div class="wg-mini-head">' + closeBtnHtml + '</div><div class="wg-boot">No widget key provided in the URL (expected ?key=...).</div></div>';
+      root.innerHTML = '<div class="wg-window"><div class="wg-mini-head">' + closeBtnHtml + '</div><div class="wg-boot">No widget client specified in the URL (expected ?client=...).</div></div>';
+      bind();
+      return;
+    }
+    if (state.bootstrapError) {
+      root.innerHTML = '<div class="wg-window"><div class="wg-mini-head">' + closeBtnHtml + '</div><div class="wg-error-banner">Could not start this widget: ' + esc(state.bootstrapError) + '</div></div>';
       bind();
       return;
     }
@@ -401,7 +407,31 @@
       });
   }
 
+  function bootstrapThenLoadBranding(){
+    if (WIDGET_KEY) {
+      // Already have a permanent key from ?key=..., nothing to bootstrap.
+      loadBranding();
+      return;
+    }
+    fetch(API_BASE + "/api/v1/public/widget/bootstrap/" + encodeURIComponent(WIDGET_CLIENT_ID))
+      .then(function(res){
+        return res.json().then(function(data){
+          if (!res.ok) throw new Error((data && data.detail) || "Request failed (" + res.status + ")");
+          return data;
+        });
+      })
+      .then(function(data){
+        WIDGET_KEY = data.session_token;
+        loadBranding();
+      })
+      .catch(function(err){
+        state.bootstrapError = err.message;
+        state.booting = false;
+        render();
+      });
+  }
+
   render();
   notifyHostSize();
-  if (!state.keyMissing) loadBranding();
+  if (!state.keyMissing) bootstrapThenLoadBranding();
 })();

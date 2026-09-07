@@ -34,8 +34,8 @@
     overviewKebabId: null,
     leadDrawerId: null,
     leadAppointments: null,
-    apiKeys: null,
-    newApiKeyReveal: null,
+    widgetKey: undefined, // undefined = not fetched yet, null = fetched, none exists
+    widgetIdDraft: "",
     leadPage: 1,
     contactPage: 1,
     knowledgePage: 1,
@@ -301,8 +301,8 @@
   function ensureDocuments(){
     api("/api/v1/documents").then(function(d){ state.documents = d; render(); }).catch(function(err){ showToast(err.message, true); });
   }
-  function ensureApiKeys(){
-    api("/api/v1/integrations/api-keys").then(function(d){ state.apiKeys = d; render(); }).catch(function(err){ showToast(err.message, true); });
+  function ensureWidgetKey(){
+    api("/api/v1/integrations/widget-key").then(function(d){ state.widgetKey = d; render(); }).catch(function(err){ showToast(err.message, true); });
   }
   function ensureAssistants(){
     api("/api/v1/assistants").then(function(d){
@@ -356,7 +356,7 @@
     if (v === "assistant") ensureAssistants();
     if (v === "tenants") ensureTenants();
     if (v === "demo") { ensureAssistants(); ensureDocuments(); }
-    if (v === "integrations") ensureApiKeys();
+    if (v === "integrations") ensureWidgetKey();
     if (v === "voice") loadChannelCaptures(CHANNEL_ACTIVITY.voice);
     if (v === "whatsapp") loadChannelCaptures(CHANNEL_ACTIVITY.whatsapp);
     render();
@@ -1883,97 +1883,99 @@
   // endpoint. That means this has to live in the client portal, not the
   // admin one: the client logs in (credentials the admin set at creation
   // time) and generates their own key here.
+  // Widget embed URL uses only a public, non-secret client id (?client=...),
+  // never the permanent key - the widget page exchanges that id for a
+  // short-lived session token itself (see engine's /public/widget/bootstrap).
+  function widgetEmbedUrl(widgetId){
+    var widgetBase = (window.EDGIFY_CONFIG && window.EDGIFY_CONFIG.WIDGET_BASE_URL) || "https://app-dev.edgifynow.com/widget";
+    return widgetBase + "?client=" + encodeURIComponent(widgetId);
+  }
+  function widgetEmbedSnippet(widgetId){
+    var widgetUrl = widgetEmbedUrl(widgetId);
+    return '<script>\n(function(){\n  var WIDGET_URL = "' + widgetUrl + '";\n' +
+      '  var BUBBLE = "70px", PANEL_W = "400px", PANEL_H = "600px";\n' +
+      '  var f = document.createElement("iframe");\n' +
+      '  f.src = WIDGET_URL;\n' +
+      '  f.title = "Business Assistant";\n' +
+      '  f.allow = "clipboard-write";\n' +
+      '  f.style.cssText = "border:0!important;position:fixed!important;right:20px!important;bottom:20px!important;" +\n' +
+      '    "width:" + BUBBLE + "!important;height:" + BUBBLE + "!important;" +\n' +
+      '    "max-width:calc(100vw - 40px)!important;max-height:calc(100vh - 40px)!important;" +\n' +
+      '    "z-index:2147483647!important;background:transparent!important;border-radius:16px!important;" +\n' +
+      '    "transition:width .15s ease,height .15s ease;";\n' +
+      '  document.body.appendChild(f);\n' +
+      '  window.addEventListener("message", function(e){\n' +
+      '    if (!e.data || e.data.source !== "edgifynow-widget") return;\n' +
+      '    f.style.width = e.data.open ? PANEL_W : BUBBLE;\n' +
+      '    f.style.height = e.data.open ? PANEL_H : BUBBLE;\n' +
+      '  });\n})();\n<\/script>';
+  }
+
   function integrationsHtml(){
-    var revealHtml = "";
-    if (state.newApiKeyReveal) {
-      var widgetBase = (window.EDGIFY_CONFIG && window.EDGIFY_CONFIG.WIDGET_BASE_URL) || "https://app-dev.edgifynow.com/widget";
-      var widgetUrl = widgetBase + "?key=" + encodeURIComponent(state.newApiKeyReveal.api_key);
-      var snippet = '<script>\n(function(){\n  var WIDGET_URL = "' + widgetUrl + '";\n' +
-        '  var BUBBLE = "70px", PANEL_W = "400px", PANEL_H = "600px";\n' +
-        '  var f = document.createElement("iframe");\n' +
-        '  f.src = WIDGET_URL;\n' +
-        '  f.title = "Business Assistant";\n' +
-        '  f.allow = "clipboard-write";\n' +
-        '  f.style.cssText = "border:0!important;position:fixed!important;right:20px!important;bottom:20px!important;" +\n' +
-        '    "width:" + BUBBLE + "!important;height:" + BUBBLE + "!important;" +\n' +
-        '    "max-width:calc(100vw - 40px)!important;max-height:calc(100vh - 40px)!important;" +\n' +
-        '    "z-index:2147483647!important;background:transparent!important;border-radius:16px!important;" +\n' +
-        '    "transition:width .15s ease,height .15s ease;";\n' +
-        '  document.body.appendChild(f);\n' +
-        '  window.addEventListener("message", function(e){\n' +
-        '    if (!e.data || e.data.source !== "edgifynow-widget") return;\n' +
-        '    f.style.width = e.data.open ? PANEL_W : BUBBLE;\n' +
-        '    f.style.height = e.data.open ? PANEL_H : BUBBLE;\n' +
-        '  });\n})();\n<\/script>';
-      revealHtml = '<div class="eg-card" style="border-color:#f0c869;background:#fffbf0;margin-bottom:16px">' +
-        '<h3>Your new widget key</h3>' +
-        '<div class="eg-error" style="background:#fff7df;color:#9b7100;margin-bottom:12px">Copy this now - you will not be able to see the full key again after leaving this page.</div>' +
-        '<div class="eg-form-row"><label>Key (' + esc(state.newApiKeyReveal.name) + ')</label><input class="eg-input" readonly value="' + esc(state.newApiKeyReveal.api_key) + '" onclick="this.select()" /></div>' +
-        '<div class="eg-form-row"><label>Embed this on your website</label><textarea class="eg-textarea" readonly style="min-height:160px;font-family:monospace;font-size:12px" onclick="this.select()">' + esc(snippet) + '</textarea></div>' +
-        '<button class="eg-btn" id="egDismissKeyReveal">I have copied this</button>' +
-        '</div>';
-    }
-
-    var listHtml;
-    if (!state.apiKeys) {
-      listHtml = '<div class="eg-empty">Loading...</div>';
-    } else if (!state.apiKeys.length) {
-      listHtml = '<div class="eg-empty">No widget keys yet - create one below to embed your assistant on your website.</div>';
+    var currentHtml;
+    if (state.widgetKey === null) {
+      currentHtml = '<div class="eg-empty">No widget created yet - create one below to embed your assistant on your website.</div>';
+    } else if (!state.widgetKey) {
+      currentHtml = '<div class="eg-empty">Loading...</div>';
     } else {
-      var rows = state.apiKeys.map(function(k){
-        return '<tr><td><b>' + esc(k.name) + '</b></td>' +
-          '<td class="eg-small eg-muted">' + esc(k.key_prefix) + '&hellip;</td>' +
-          '<td>' + (k.is_active ? '<span class="eg-pill green">Active</span>' : '<span class="eg-pill red">Revoked</span>') + '</td>' +
-          '<td class="eg-small eg-muted">' + fmtDate(k.created_at) + '</td>' +
-          '<td>' + (k.is_active ? '<button class="eg-btn danger" style="padding:6px 10px" data-revoke-key="' + esc(k.id) + '">Revoke</button>' : "") + '</td></tr>';
-      }).join("");
-      listHtml = '<table class="eg-table"><thead><tr><th>Name</th><th>Key prefix</th><th>Status</th><th>Created</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>';
+      var k = state.widgetKey;
+      currentHtml =
+        '<table class="eg-table"><thead><tr><th>Widget ID</th><th>Status</th><th>Created</th><th></th></tr></thead><tbody>' +
+        '<tr><td><b>' + esc(k.widget_id) + '</b></td>' +
+        '<td>' + (k.is_active ? '<span class="eg-pill green">Active</span>' : '<span class="eg-pill red">Revoked</span>') + '</td>' +
+        '<td class="eg-small eg-muted">' + fmtDate(k.created_at) + '</td>' +
+        '<td>' + (k.is_active ? '<button class="eg-btn danger" style="padding:6px 10px" id="egRevokeWidgetKey">Revoke</button>' : "") + '</td></tr>' +
+        '</tbody></table>' +
+        (k.is_active
+          ? '<div class="eg-form-row" style="margin-top:14px"><label>Embed this on your website</label><textarea class="eg-textarea" readonly style="min-height:160px;font-family:monospace;font-size:12px" onclick="this.select()">' + esc(widgetEmbedSnippet(k.widget_id)) + '</textarea></div>'
+          : "");
     }
 
-    return revealHtml +
-      '<div class="eg-card" style="margin-bottom:16px">' +
-      '<h3>Widget keys</h3>' +
-      '<p class="eg-small eg-muted" style="margin-top:-8px">A widget key lets your website embed your AI assistant. Treat it like a publishable key (safe to put in your site\'s HTML) - it can\'t access your CRM, leads, or account settings.</p>' +
-      listHtml +
+    return '<div class="eg-card" style="margin-bottom:16px">' +
+      '<h3>Current widget</h3>' +
+      '<p class="eg-small eg-muted" style="margin-top:-8px">Only one active widget is used for your website at a time. The embed code identifies your widget by this ID only, your account\'s actual key is never exposed to your website\'s HTML.</p>' +
+      currentHtml +
       '</div>' +
       '<div class="eg-card">' +
-      '<h3>Create a new widget key</h3>' +
-      '<div class="eg-form-row"><label>Name</label><input class="eg-input" id="egNewKeyName" placeholder="e.g. Main website" /></div>' +
-      '<button class="eg-btn" id="egCreateKey">Generate widget key</button>' +
+      '<h3>' + (state.widgetKey && state.widgetKey.is_active ? "Replace widget" : "Create website widget") + '</h3>' +
+      (state.widgetKey && state.widgetKey.is_active ? '<p class="eg-small eg-muted" style="margin-top:-8px">Creating a new one revokes the current widget immediately - update the code on your website after.</p>' : "") +
+      '<div class="eg-form-row"><label>Widget ID</label><input class="eg-input" id="egWidgetIdInput" placeholder="e.g. bright-path-tutoring" value="' + esc(state.widgetIdDraft) + '" /></div>' +
+      '<button class="eg-btn" id="egCreateWidgetKey">Generate widget key</button>' +
       '</div>';
   }
 
   function bindIntegrations(){
-    var dismissBtn = document.getElementById("egDismissKeyReveal");
-    if (dismissBtn) dismissBtn.addEventListener("click", function(){ state.newApiKeyReveal = null; render(); });
+    var idInput = document.getElementById("egWidgetIdInput");
+    if (idInput) idInput.addEventListener("input", function(){
+      preserveFocus(function(){ state.widgetIdDraft = idInput.value; });
+    });
 
-    var createBtn = document.getElementById("egCreateKey");
+    var createBtn = document.getElementById("egCreateWidgetKey");
     if (createBtn) createBtn.addEventListener("click", function(){
-      var name = document.getElementById("egNewKeyName").value.trim();
-      if (!name) { showToast("Please name this key (e.g. which website it's for)", true); return; }
+      var widgetId = (document.getElementById("egWidgetIdInput").value || "").trim();
+      if (!widgetId) { showToast("Please enter a widget ID (e.g. your business slug)", true); return; }
       createBtn.disabled = true; createBtn.textContent = "Generating...";
-      api("/api/v1/integrations/api-keys", { method: "POST", body: { name: name } })
+      api("/api/v1/integrations/widget-key", { method: "POST", body: { widget_id: widgetId } })
         .then(function(created){
-          state.newApiKeyReveal = created;
-          showToast("Widget key created");
-          ensureApiKeys();
+          state.widgetKey = created;
+          state.widgetIdDraft = "";
+          showToast("Widget created");
+          render();
         })
         .catch(function(err){ showToast(err.message, true); })
         .then(function(){ createBtn.disabled = false; createBtn.textContent = "Generate widget key"; });
     });
 
-    document.querySelectorAll("[data-revoke-key]").forEach(function(btn){
-      btn.addEventListener("click", function(){
-        var id = btn.getAttribute("data-revoke-key");
-        if (!window.confirm("Revoke this widget key? Any website embedding it will stop working immediately.")) return;
-        btn.disabled = true; btn.textContent = "Revoking...";
-        api("/api/v1/integrations/api-keys/" + id, { method: "DELETE" })
-          .then(function(){
-            showToast("Widget key revoked");
-            ensureApiKeys();
-          })
-          .catch(function(err){ showToast(err.message, true); btn.disabled = false; btn.textContent = "Revoke"; });
-      });
+    var revokeBtn = document.getElementById("egRevokeWidgetKey");
+    if (revokeBtn) revokeBtn.addEventListener("click", function(){
+      if (!window.confirm("Revoke this widget? Your website's embed will stop working immediately.")) return;
+      revokeBtn.disabled = true; revokeBtn.textContent = "Revoking...";
+      api("/api/v1/integrations/widget-key", { method: "DELETE" })
+        .then(function(){
+          showToast("Widget revoked");
+          ensureWidgetKey();
+        })
+        .catch(function(err){ showToast(err.message, true); revokeBtn.disabled = false; revokeBtn.textContent = "Revoke"; });
     });
   }
 
