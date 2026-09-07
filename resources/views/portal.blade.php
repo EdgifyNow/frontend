@@ -49,6 +49,20 @@ a{text-decoration:none;color:inherit}
 .eg-pill.green{background:#e8f7f0;color:var(--green)}
 .eg-pill.amber{background:#fff7df;color:var(--amber)}
 .eg-pill.red{background:#feecec;color:var(--red)}
+.eg-pill.gray{background:#f1f2f4;color:var(--muted)}
+.eg-tilegrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}
+.eg-vtile{background:#fff;border:1px solid var(--line);border-left:4px solid var(--line);border-radius:12px;padding:14px 16px;cursor:pointer;transition:box-shadow .15s,transform .15s}
+.eg-vtile:hover{box-shadow:0 6px 20px rgba(23,52,92,.09);transform:translateY(-1px)}
+.eg-vtile.gray{border-left-color:var(--muted)}
+.eg-vtile.green{border-left-color:var(--green)}
+.eg-vtile.amber{border-left-color:var(--amber)}
+.eg-vtile.blue{border-left-color:var(--blue)}
+.eg-vtile.red{border-left-color:var(--red)}
+.eg-vtile-top{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:8px}
+.eg-vtile-name{font-weight:650;font-size:14px}
+.eg-vtile-phone{color:var(--muted);font-size:12px;margin-top:2px}
+.eg-vtile-summary{font-size:13px;color:#374151;margin-top:8px;line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.eg-vtile-time{color:var(--muted);font-size:11px;margin-top:10px}
 .eg-table{width:100%;border-collapse:collapse}
 .eg-table th,.eg-table td{padding:12px 10px;border-bottom:1px solid var(--line);text-align:left;font-size:13px;vertical-align:middle}
 .eg-table th{color:var(--muted);font-weight:650;background:#fbfcfe}

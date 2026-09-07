@@ -45,7 +45,13 @@
     leadStatusFilter: "all",
     leadSourceFilter: "all",
     contactSearch: "",
-    contactDateFilter: "quarter"
+    contactDateFilter: "quarter",
+    tenantSelf: null,
+    voiceCaptures: null,
+    voiceSearch: "",
+    voiceStatusFilter: "all",
+    voiceDrawerId: null,
+    voiceDrawerDetail: null
   };
 
   function esc(s){
@@ -272,6 +278,10 @@
       api("/api/v1/crm/contacts").then(function(d){ state.contacts = d; render(); }).catch(function(){});
       api("/api/v1/documents").then(function(d){ state.documents = d; render(); }).catch(function(){});
       api("/api/v1/assistants").then(function(d){ state.assistants = d; render(); }).catch(function(){});
+      // Gates the Voice Activity nav item: only shown once this tenant's
+      // voice channel is actually enabled (set from the admin side), see
+      // GET /tenants/me.
+      api("/api/v1/tenants/me").then(function(d){ state.tenantSelf = d; render(); }).catch(function(){});
     }
   }
 
@@ -342,7 +352,29 @@
     if (v === "tenants") ensureTenants();
     if (v === "demo") { ensureAssistants(); ensureDocuments(); }
     if (v === "integrations") ensureApiKeys();
+    if (v === "voice") loadVoiceCaptures();
     render();
+  }
+
+  function loadVoiceCaptures(){
+    var params = new URLSearchParams();
+    if (state.voiceStatusFilter !== "all") params.set("status_filter", state.voiceStatusFilter);
+    if (state.voiceSearch) params.set("search", state.voiceSearch);
+    var qs = params.toString();
+    api("/api/v1/crm/voice-captures" + (qs ? "?" + qs : "")).then(function(d){
+      state.voiceCaptures = d;
+      render();
+    }).catch(function(err){ showToast(err.message, true); });
+  }
+
+  function openVoiceDrawer(id){
+    state.voiceDrawerId = id;
+    state.voiceDrawerDetail = null;
+    render();
+    api("/api/v1/crm/voice-captures/" + id).then(function(d){
+      state.voiceDrawerDetail = d;
+      render();
+    }).catch(function(err){ showToast(err.message, true); });
   }
 
   // ---------- RENDER ----------
@@ -395,13 +427,21 @@
     // assistant already has the real thing (AI Assistant tab); Instant Demo
     // exists so an EdgifyNow admin can show a prospect a live result without
     // that prospect needing their own account yet.
-    return [
+    var items = [
       { id: "dashboard", label: "Dashboard", icon: "◉" },
       { id: "leads", label: "Leads & Contacts", icon: "◫" },
       { id: "knowledge", label: "Knowledge", icon: "▤" },
       { id: "assistant", label: "AI Assistant", icon: "◎" },
       { id: "integrations", label: "Integrations", icon: "⚿" }
     ];
+    // Voice Activity is a real-time operational dashboard, only meaningful
+    // (and only shown) once this tenant's voice channel is enabled - see
+    // GET /tenants/me. Hidden entirely rather than shown-disabled, since a
+    // tenant without voice has nothing to look at there.
+    if (state.tenantSelf && state.tenantSelf.voice_enabled) {
+      items.splice(3, 0, { id: "voice", label: "Voice Activity", icon: "☎" });
+    }
+    return items;
   }
 
   function renderShell(){
@@ -435,7 +475,7 @@
       '</div>' +
       '<div id="egContent"></div>' +
       '</main>' +
-      '</div>' + toastHtml + leadDrawerHtml();
+      '</div>' + toastHtml + leadDrawerHtml() + voiceDrawerHtml();
 
     document.querySelectorAll("[data-nav]").forEach(function(el){
       el.addEventListener("click", function(){
@@ -445,6 +485,7 @@
       });
     });
     bindDrawer();
+    bindVoiceDrawer();
 
     renderContent();
   }
@@ -458,6 +499,7 @@
     if (state.view === "tenantDetail") return state.tenantDetail ? (state.tenantDetail.name || state.tenantDetail.slug) : "Client details";
     if (state.view === "demo") return "Instant Demo";
     if (state.view === "integrations") return "Integrations";
+    if (state.view === "voice") return "Voice Activity";
     return "";
   }
   function viewSub(){
@@ -469,6 +511,7 @@
     if (state.view === "tenantDetail") return "Client account, billing and usage.";
     if (state.view === "demo") return "Upload a document and get a live AI answer, right now.";
     if (state.view === "integrations") return "Generate a widget key to embed your assistant on your website.";
+    if (state.view === "voice") return "Live calls, orders, and appointments captured by your voice assistant.";
     return "";
   }
 
@@ -483,6 +526,7 @@
     if (state.view === "tenantDetail") { el.innerHTML = tenantDetailHtml(); bindTenantDetail(); return; }
     if (state.view === "demo") { el.innerHTML = demoHtml(); bindDemo(); return; }
     if (state.view === "integrations") { el.innerHTML = integrationsHtml(); bindIntegrations(); return; }
+    if (state.view === "voice") { el.innerHTML = voiceHtml(); bindVoice(); return; }
   }
 
   // ---- Dashboard ----
@@ -883,6 +927,130 @@
         return [contactName(c), c.email, c.phone, c.company, c.job_title, c.preferred_channel, c.last_interaction_at, c.created_at];
       });
       downloadCsv("edgifynow-crm-contacts.csv", header, body);
+    });
+  }
+
+  // ---- Voice Activity (real-time operational dashboard, not a usage
+  // report - each captured call is a business outcome, order/appointment/
+  // lead/general inquiry, moving through a status workflow) ----
+  var VOICE_STATUS_COLOR = { new: "gray", in_progress: "green", ready: "amber", completed: "blue", cancelled: "red" };
+  var VOICE_STATUS_OPTIONS = ["new", "in_progress", "ready", "completed", "cancelled"];
+
+  function voiceStatusLabel(s){
+    return String(s || "").split("_").map(function(w){ return w.charAt(0).toUpperCase() + w.slice(1); }).join(" ");
+  }
+  function voiceTypeLabel(t){
+    return String(t || "").split("_").map(function(w){ return w.charAt(0).toUpperCase() + w.slice(1); }).join(" ");
+  }
+
+  function voiceHtml(){
+    var statusOptions = ["all"].concat(VOICE_STATUS_OPTIONS);
+    var filters =
+      '<div class="eg-row" style="margin-bottom:14px;gap:10px;flex-wrap:wrap">' +
+      '<input class="eg-input" id="egVoiceSearch" placeholder="Search name, phone, or summary..." style="max-width:280px" value="' + esc(state.voiceSearch) + '" />' +
+      '<select class="eg-select" id="egVoiceStatusFilter" style="width:auto">' +
+      statusOptions.map(function(s){
+        return '<option value="' + s + '"' + (s === state.voiceStatusFilter ? " selected" : "") + '>' + (s === "all" ? "All statuses" : voiceStatusLabel(s)) + '</option>';
+      }).join("") +
+      '</select>' +
+      '</div>';
+
+    if (state.voiceCaptures === null) return filters + '<div class="eg-small eg-muted">Loading...</div>';
+    if (!state.voiceCaptures.length) return filters + '<div class="eg-card"><div class="eg-small eg-muted">No voice activity yet. Once your assistant takes a call, captured orders, appointments, and leads will show up here.</div></div>';
+
+    var tiles = state.voiceCaptures.map(function(v){
+      var color = VOICE_STATUS_COLOR[v.status] || "gray";
+      return '<div class="eg-vtile ' + color + '" data-voice-drawer="' + esc(v.id) + '">' +
+        '<div class="eg-vtile-top">' +
+        '<div><div class="eg-vtile-name">' + esc(v.contact.name || "Unknown caller") + '</div>' +
+        '<div class="eg-vtile-phone">' + esc(v.contact.phone || "-") + '</div></div>' +
+        '<span class="eg-pill ' + color + '">' + voiceStatusLabel(v.status) + '</span>' +
+        '</div>' +
+        '<span class="eg-tag">' + esc(voiceTypeLabel(v.capture_type)) + '</span>' +
+        '<div class="eg-vtile-summary">' + esc(v.summary) + '</div>' +
+        '<div class="eg-vtile-time">' + fmtDate(v.created_at) + '</div>' +
+        '</div>';
+    }).join("");
+
+    return filters + '<div class="eg-tilegrid">' + tiles + '</div>';
+  }
+
+  function bindVoice(){
+    var search = document.getElementById("egVoiceSearch");
+    if (search) search.addEventListener("input", function(){
+      preserveFocus(function(){ state.voiceSearch = search.value; });
+      clearTimeout(state._voiceSearchDebounce);
+      state._voiceSearchDebounce = setTimeout(loadVoiceCaptures, 300);
+    });
+    var statusFilter = document.getElementById("egVoiceStatusFilter");
+    if (statusFilter) statusFilter.addEventListener("change", function(){
+      state.voiceStatusFilter = statusFilter.value;
+      loadVoiceCaptures();
+    });
+    document.querySelectorAll("[data-voice-drawer]").forEach(function(el){
+      el.addEventListener("click", function(){ openVoiceDrawer(el.getAttribute("data-voice-drawer")); });
+    });
+  }
+
+  function voiceDrawerHtml(){
+    if (!state.voiceDrawerId) return "";
+    var d = state.voiceDrawerDetail;
+    if (!d) {
+      return '<div class="eg-drawer-backdrop open" id="egVoiceDrawerBackdrop"></div>' +
+        '<aside class="eg-drawer open"><div class="eg-small eg-muted">Loading...</div></aside>';
+    }
+    var statusSelect = '<select class="eg-select" id="egVoiceDrawerStatus">' + VOICE_STATUS_OPTIONS.map(function(s){
+      return '<option value="' + s + '"' + (s === d.status ? " selected" : "") + '>' + voiceStatusLabel(s) + '</option>';
+    }).join("") + '</select>';
+
+    var transcriptHtml = !d.transcript.length
+      ? '<div class="eg-small eg-muted">No transcript available.</div>'
+      : d.transcript.map(function(m){
+          return '<div style="margin-bottom:10px"><b class="eg-small">' + esc(m.role === "assistant" ? "Assistant" : "Caller") + '</b>' +
+            '<div style="font-size:13px;line-height:1.5">' + esc(m.content) + '</div></div>';
+        }).join("");
+
+    return '<div class="eg-drawer-backdrop open" id="egVoiceDrawerBackdrop"></div>' +
+      '<aside class="eg-drawer open">' +
+      '<button class="eg-drawer-close" id="egVoiceDrawerClose" aria-label="Close">&times;</button>' +
+      '<h2>' + esc(d.contact.name || "Unknown caller") + '</h2>' +
+      '<div class="eg-drawer-sub">' + esc(voiceTypeLabel(d.capture_type)) + '</div>' +
+      '<h4>Caller</h4>' +
+      '<div class="eg-kv"><span>Phone</span><b>' + esc(d.contact.phone || "-") + '</b></div>' +
+      '<div class="eg-kv"><span>Email</span><b>' + esc(d.contact.email || "-") + '</b></div>' +
+      '<div class="eg-kv"><span>Received</span><b>' + fmtDate(d.created_at) + '</b></div>' +
+      '<h4>Summary</h4>' +
+      '<div style="line-height:1.55;font-size:13px">' + esc(d.summary) + '</div>' +
+      (d.details && Object.keys(d.details).length
+        ? '<h4>Details</h4>' + Object.keys(d.details).map(function(k){
+            return '<div class="eg-kv"><span>' + esc(k) + '</span><b>' + esc(d.details[k]) + '</b></div>';
+          }).join("")
+        : "") +
+      '<h4>Status</h4>' +
+      '<div class="eg-form-row">' + statusSelect + '</div>' +
+      '<button class="eg-btn" id="egVoiceDrawerSaveStatus">Save status</button>' +
+      '<h4>Transcript</h4>' +
+      transcriptHtml +
+      '</aside>';
+  }
+
+  function bindVoiceDrawer(){
+    var backdrop = document.getElementById("egVoiceDrawerBackdrop");
+    if (backdrop) backdrop.addEventListener("click", function(){ state.voiceDrawerId = null; state.voiceDrawerDetail = null; render(); });
+    var closeBtn = document.getElementById("egVoiceDrawerClose");
+    if (closeBtn) closeBtn.addEventListener("click", function(){ state.voiceDrawerId = null; state.voiceDrawerDetail = null; render(); });
+    var saveBtn = document.getElementById("egVoiceDrawerSaveStatus");
+    if (saveBtn) saveBtn.addEventListener("click", function(){
+      var newStatus = document.getElementById("egVoiceDrawerStatus").value;
+      saveBtn.disabled = true;
+      api("/api/v1/crm/voice-captures/" + state.voiceDrawerId, { method: "PATCH", body: { status: newStatus } })
+        .then(function(){
+          showToast("Status updated");
+          if (state.voiceCaptures) loadVoiceCaptures();
+          openVoiceDrawer(state.voiceDrawerId);
+        })
+        .catch(function(err){ showToast(err.message, true); })
+        .then(function(){ saveBtn.disabled = false; });
     });
   }
 
