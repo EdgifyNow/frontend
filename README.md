@@ -3,9 +3,9 @@
 Standalone Laravel application containing:
 
 - **Admin & Client Portal** (`/` or `/portal`) — JWT-authenticated, role-based (platform admin vs. tenant owner/employee). Login, dashboard, CRM leads/contacts, knowledge base, AI assistant config + test chat, tenant management (admin), Instant Demo tool.
-- **Public Website Widget** (`/widget?key=WIDGET_KEY`) — anonymous, embeddable chat widget for any client's website. Uses a tenant-scoped public widget key (`X-API-Key` header), never a login token. Supports live AI chat with conversation continuity, lead capture, and appointment booking.
+- **Public Website Widget** (`/widget?client=WIDGET_ID`) — anonymous, embeddable chat widget for any client's website. Exchanges the public `WIDGET_ID` for a short-lived session token server-side (`X-API-Key` header), never a login token or permanent secret. Supports live AI chat with conversation continuity, lead capture, and appointment booking.
 
-This app does **not** depend on WordPress in any way: no `wp-load.php`, no WordPress database, no WordPress sessions, no WordPress plugins. It's a plain Laravel 13 / PHP 8.3 app that can be deployed anywhere Laravel runs. WordPress's only involvement is embedding the widget via a plain `<iframe>` pointing at this app's `/widget` URL — see "Embedding the widget" below.
+This app does **not** depend on WordPress in any way: no `wp-load.php`, no WordPress database, no WordPress sessions, no WordPress plugins. It's a plain Laravel 13 / PHP 8.3 app that can be deployed anywhere Laravel runs. WordPress's only involvement is embedding the widget via a small loader script pointing at this app's `/widget` URL — see "Embedding the widget" below.
 
 ## Requirements
 
@@ -68,12 +68,12 @@ This app is always deployed behind a TLS-terminating reverse proxy (see `Dockerf
 
 ## Embedding the widget
 
-Once deployed, give each client this snippet (swap in their tenant's own widget key):
+Each client generates their own install code from the Client portal's **Integrations** page (self-serve — no admin action needed): pick a Widget ID (defaults from their business name), click Generate, then Copy Install Code. That page builds exactly this:
 
 ```html
 <script>
 (function(){
-  var WIDGET_URL = "https://app-dev.edgifynow.com/widget?key=TENANT_WIDGET_KEY";
+  var WIDGET_URL = "https://app.edgifynow.com/widget?client=WIDGET_ID";
   var BUBBLE = "70px", PANEL_W = "400px", PANEL_H = "600px";
   var f = document.createElement("iframe");
   f.src = WIDGET_URL;
@@ -94,11 +94,19 @@ Once deployed, give each client this snippet (swap in their tenant's own widget 
 </script>
 ```
 
-Replace `app-dev.edgifynow.com` with `app.edgifynow.com` for a production client. **The widget key is the only thing that changes per client/tenant** — the rest of the snippet stays identical.
-
 This is a small loader script, not a plain static `<iframe>` tag, and that's deliberate: an iframe intercepts clicks over its *entire box* no matter what's drawn inside it, so a statically-sized 400x600 iframe would block clicks to the host page underneath it (menus, buttons, etc.) even while the widget shows nothing but its small collapsed bubble. The script starts the iframe at bubble size and listens for a `postMessage` the widget sends on every open/close (see `notifyHostSize()` in `public/js/widget.js`), resizing the real iframe element only while the panel is actually open. **A plain static `<iframe>` tag still works and shows the widget correctly, but keeps this click-blocking problem** — always use the script snippet above for a real embed.
 
-The widget key is read client-side from the URL and sent only as the `X-API-Key` header on requests to `/api/v1/public/*`. This app never renders it into the page and never writes it to `console.log`. It's important to be precise about what that does and doesn't guarantee, though: because it's a query-string value (`?key=...`), it **can** still appear in browser history, the referrer header of outbound requests, and web server access logs on any server it passes through — that's inherent to putting any value in a URL, not something client-side code can prevent. Treat it the same way you'd treat any embeddable-widget public key (Stripe's publishable key, Intercom's app ID, etc.): safe to expose in a browser, tenant-scoped, and rotatable, but not something to also paste into chat, tickets, or commits unnecessarily. No tenant ID, JWT, admin credential, or backend secret is ever present in the browser for this page — that guarantee does hold.
+### How `?client=WIDGET_ID` works (no permanent secret in the URL)
+
+`WIDGET_ID` is a public, non-secret, client-chosen identifier — never the permanent API key itself. On load, `public/js/widget.js` exchanges it for a short-lived session token:
+
+1. `GET /api/v1/public/widget/bootstrap/{widget_id}` (unauthenticated — that's what hands out the token) → `{ session_token, expires_in }`
+2. Every subsequent call (`/api/v1/public/branding`, `/chat`, `/leads`, `/appointments`) sends `session_token` as `X-API-Key`
+3. If a call ever gets a `401` (token expired mid-visit), the widget silently re-bootstraps once and retries — no visible interruption
+
+The permanent key behind a `WIDGET_ID` is generated and revoked server-side (`POST`/`GET`/`DELETE /api/v1/integrations/widget-key`, called from the Integrations page) and is **never returned to the browser on any call, ever**. Only one widget is active per tenant at a time — generating a new one immediately revokes the previous one.
+
+**Legacy fallback:** `?key=PERMANENT_KEY` (the original flow, where the real key sat directly in the URL) still works for any embed generated before this changed, but new embeds always use `?client=`. Its *scope* is the same either way — tenant-scoped to `/api/v1/public/*` only, same as a `WIDGET_ID`-derived session token, can't touch CRM/admin/other-tenant data — the difference is that a permanent key doesn't expire or rotate on its own, so it sits in that URL indefinitely instead of for a few minutes at a time. No tenant ID, JWT, admin credential, or other backend secret is ever present in the browser for this page — that guarantee holds regardless of which flow is used.
 
 ## Testing
 
@@ -106,7 +114,7 @@ The widget key is read client-side from the URL and sent only as the `X-API-Key`
 php artisan test
 ```
 
-16 tests covering: portal/widget pages render, both are `noindex`, both expose `window.EDGIFY_CONFIG`, the widget key is never echoed into server-rendered HTML, `/up` reports healthy, and `EnvironmentGuard`'s four staging/production combinations behave correctly (including that a production instance pointed at the staging API throws rather than silently running).
+21 tests covering: portal/widget pages render, both are `noindex`, both expose `window.EDGIFY_CONFIG`, the widget key is never echoed into server-rendered HTML, `/up` reports healthy, `EnvironmentGuard`'s staging/production combinations (including that a production instance pointed at the staging API throws rather than silently running) and its asset-URL-scheme checks.
 
 Not covered yet: actual browser-driven interaction (typing in the chat box, clicking "book appointment", etc.) — there's no JS test runner wired up for that. The PHP tests above cover what the server renders and the environment-safety logic; they don't simulate a user clicking through the widget.
 
@@ -114,13 +122,13 @@ Not covered yet: actual browser-driven interaction (typing in the chat box, clic
 
 There's no CI/CD pipeline yet — release process today:
 
-1. Everything lands on `frontend-staging-handover` (or its successor) via normal commits.
+1. Everything lands on `main` via normal commits (staging deploys pull from here directly).
 2. When a batch of changes is ready to actually deploy, tag it — deploy an **exact tag**, never a moving branch:
    ```bash
-   git tag -a v0.1.0-rc1 -m "Description of what's in this release"
-   git push origin v0.1.0-rc1
+   git tag -a v0.11.0-rc1 -m "Description of what's in this release"
+   git push origin v0.11.0-rc1
    ```
-3. On the target server: `git fetch --tags && git checkout v0.1.0-rc1`, then either build the `Dockerfile` or run manually:
+3. On the target server: `git fetch --tags && git checkout v0.11.0-rc1`, then either build the `Dockerfile` or run manually:
    ```bash
    composer install --no-dev --optimize-autoloader
    php artisan config:cache && php artisan route:cache && php artisan view:cache
@@ -130,4 +138,4 @@ There's no CI/CD pipeline yet — release process today:
 ## Known limitations
 
 - **JWT stored in `localStorage`** (portal only — the widget never handles a JWT at all). Acceptable for staging, but a production deployment should move to a secure `HttpOnly` cookie via a small backend-for-frontend (BFF) endpoint instead, so the token isn't reachable from JS at all (mitigates XSS token theft). Not implemented here — this is a real architectural change, not a config tweak, and is called out rather than silently left for later.
-- The `/public/*` API endpoints currently reject cross-origin requests from anywhere except `https://edgifynow.com` (confirmed via live testing from `http://localhost`) — since the whole point of the widget is to be embeddable on *any* client's website, this needs a permissive/wildcard CORS policy on those specific endpoints, not a fixed allowlist. Flagged separately to the backend team; blocks live end-to-end verification of the widget until resolved.
+- **CORS status needs re-verifying.** Earlier testing found `/public/*` only allowed `https://edgifynow.com` (a fixed allowlist, not workable for embedding on arbitrary client sites) — but the bootstrap endpoint's own API docs now describe per-tenant `allowed_origins` as *opt-in* ("a tenant with no allowed_origins configured is unrestricted"), which reads like the backend has since moved to permissive-by-default. Not independently confirmed live from a real third-party origin — do that before relying on it for production embeds.
