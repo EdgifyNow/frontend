@@ -1,8 +1,24 @@
 (function(){
-  var API_BASE = (window.EDGIFY_CONFIG && window.EDGIFY_CONFIG.API_BASE_URL) || "https://api-dev.edgifynow.com";
+  // No hard-coded staging fallback here on purpose: config-script.blade.php
+  // always renders this from the same server-validated config that
+  // EnvironmentGuard already checked; if it's somehow missing, silently
+  // defaulting to the staging API is exactly the wrong failure mode in
+  // production - render() below blocks with a visible error instead.
+  var API_BASE = (window.EDGIFY_CONFIG && window.EDGIFY_CONFIG.API_BASE_URL) || "";
   var TOKEN_KEY = "eg_portal_token";
   var root = document.getElementById("egApp");
   function AND(){ for (var i=0;i<arguments.length;i++){ if(!arguments[i]) return false; } return true; }
+
+  // Voice/WhatsApp aren't part of V1 production scope - this only gates
+  // the enablement controls and dashboards (Client Details toggles,
+  // Assistant "WhatsApp" type option, Voice/WhatsApp Activity nav items),
+  // nothing is deleted. Env-driven (FEATURE_VOICE_WHATSAPP), default true -
+  // production's .env sets it false. This is a global switch, separate
+  // from (and takes priority over) each tenant's own voice_enabled/
+  // whatsapp_enabled - those still gate visibility per-tenant underneath it.
+  function featureVoiceWhatsapp(){
+    return !!(window.EDGIFY_CONFIG && window.EDGIFY_CONFIG.FEATURE_VOICE_WHATSAPP);
+  }
 
   var state = {
     token: localStorage.getItem(TOKEN_KEY) || null,
@@ -364,6 +380,10 @@
 
   // ---------- RENDER ----------
   function render(){
+    if (!API_BASE) {
+      root.innerHTML = '<div class="eg-login-wrap"><div class="eg-login-card"><div class="eg-error">Configuration error: API_BASE_URL is not set. This page can\'t reach the API - contact support instead of retrying.</div></div></div>';
+      return;
+    }
     if (state.booting) {
       root.innerHTML = '<div class="eg-login-wrap"><div style="color:#fff;font-size:14px">Loading...</div></div>';
       return;
@@ -422,11 +442,14 @@
     // Voice Activity is a real-time operational dashboard, only meaningful
     // (and only shown) once this tenant's voice channel is enabled - see
     // GET /tenants/me. Hidden entirely rather than shown-disabled, since a
-    // tenant without voice has nothing to look at there.
-    if (state.tenantSelf && state.tenantSelf.voice_enabled) {
+    // tenant without voice has nothing to look at there. featureVoiceWhatsapp()
+    // is the global production on/off switch, checked first: Voice/WhatsApp
+    // aren't in V1 scope, so this stays hidden for every tenant in
+    // production regardless of their own per-tenant enablement.
+    if (featureVoiceWhatsapp() && state.tenantSelf && state.tenantSelf.voice_enabled) {
       items.splice(3, 0, { id: "voice", label: "Voice Activity", icon: "☎" });
     }
-    if (state.tenantSelf && state.tenantSelf.whatsapp_enabled) {
+    if (featureVoiceWhatsapp() && state.tenantSelf && state.tenantSelf.whatsapp_enabled) {
       items.splice(3, 0, { id: "whatsapp", label: "WhatsApp Activity", icon: "◆" });
     }
     return items;
@@ -1354,11 +1377,11 @@
   }
 
   function emptyAssistantHtml(){
-    return '<div class="eg-card"><h3>No AI assistant yet</h3><p class="eg-muted" style="margin:0 0 16px">Create your first AI assistant to start answering questions from your website chat and WhatsApp.</p>' +
+    return '<div class="eg-card"><h3>No AI assistant yet</h3><p class="eg-muted" style="margin:0 0 16px">Create your first AI assistant to start answering questions from your website chat' + (featureVoiceWhatsapp() ? ' and WhatsApp' : '') + '.</p>' +
       '<div class="eg-form-row"><label>Assistant name</label><input class="eg-input" id="egNewAssistantName" value="Website Assistant" /></div>' +
       '<div class="eg-form-row"><label>Type</label><select class="eg-select" id="egNewAssistantType">' +
       '<option value="customer_website">Customer website</option>' +
-      '<option value="whatsapp">WhatsApp</option>' +
+      (featureVoiceWhatsapp() ? '<option value="whatsapp">WhatsApp</option>' : '') +
       '<option value="internal_employee">Internal employee</option>' +
       '<option value="other">Other</option>' +
       '</select></div>' +
@@ -1602,11 +1625,13 @@
       '<div class="eg-card">' +
       '<h3>Usage &amp; channels</h3>' +
       '<div class="eg-form-row"><label>AI interaction usage (this period)</label><div class="eg-input" style="background:#f7f9fc">' + usageHtml + '</div></div>' +
-      '<div class="eg-form-row"><label><input type="checkbox" id="egDetailWhatsappEnabled"' + (t.whatsapp_enabled ? ' checked' : '') + ' style="margin-right:6px" />WhatsApp enabled</label></div>' +
-      '<div class="eg-form-row"><label>WhatsApp number</label><input class="eg-input" id="egDetailWhatsappNumber" value="' + esc(t.whatsapp_number || "") + '" placeholder="+15551234567" /></div>' +
-      '<div class="eg-form-row"><label><input type="checkbox" id="egDetailVoiceEnabled"' + (t.voice_enabled ? ' checked' : '') + ' style="margin-right:6px" />Voice AI enabled</label></div>' +
-      '<div class="eg-form-row"><label>Voice number</label><input class="eg-input" id="egDetailVoiceNumber" value="' + esc(t.voice_number || "") + '" placeholder="+15551234567" /></div>' +
-      '<button class="eg-btn" id="egSaveChannels">Save channel settings</button>' +
+      (featureVoiceWhatsapp() ?
+        '<div class="eg-form-row"><label><input type="checkbox" id="egDetailWhatsappEnabled"' + (t.whatsapp_enabled ? ' checked' : '') + ' style="margin-right:6px" />WhatsApp enabled</label></div>' +
+        '<div class="eg-form-row"><label>WhatsApp number</label><input class="eg-input" id="egDetailWhatsappNumber" value="' + esc(t.whatsapp_number || "") + '" placeholder="+15551234567" /></div>' +
+        '<div class="eg-form-row"><label><input type="checkbox" id="egDetailVoiceEnabled"' + (t.voice_enabled ? ' checked' : '') + ' style="margin-right:6px" />Voice AI enabled</label></div>' +
+        '<div class="eg-form-row"><label>Voice number</label><input class="eg-input" id="egDetailVoiceNumber" value="' + esc(t.voice_number || "") + '" placeholder="+15551234567" /></div>' +
+        '<button class="eg-btn" id="egSaveChannels">Save channel settings</button>'
+        : '<div class="eg-small eg-muted">WhatsApp and Voice AI are not part of this release.</div>') +
       '<h3 style="margin-top:18px">Contact</h3>' +
       '<div class="eg-form-row"><label>Contact name</label><div class="eg-input" style="background:#f7f9fc">' + (t.contact_name ? esc(t.contact_name) : dash) + '</div></div>' +
       '<div class="eg-form-row"><label>Contact phone</label><div class="eg-input" style="background:#f7f9fc">' + (t.contact_phone ? esc(t.contact_phone) : dash) + '</div></div>' +

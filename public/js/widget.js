@@ -1,5 +1,10 @@
 (function(){
-  var API_BASE = (window.EDGIFY_CONFIG && window.EDGIFY_CONFIG.API_BASE_URL) || "https://api-dev.edgifynow.com";
+  // No hard-coded staging fallback here on purpose: config-script.blade.php
+  // always renders this from the same server-validated config Laravel's
+  // EnvironmentGuard already checked; if it's somehow missing, silently
+  // defaulting to the staging API is exactly the wrong failure mode in
+  // production - render() below blocks with a visible error instead.
+  var API_BASE = (window.EDGIFY_CONFIG && window.EDGIFY_CONFIG.API_BASE_URL) || "";
   var CONV_KEY = "eg_widget_conversation_id";
   var root = document.getElementById("wgRoot");
 
@@ -82,12 +87,26 @@
 
   function api(path, opts){
     opts = opts || {};
+    var isRetry = !!opts._retry;
     var headers = { "Content-Type": "application/json", "X-API-Key": WIDGET_KEY };
     return fetch(API_BASE + path, {
       method: opts.method || "GET",
       headers: headers,
       body: opts.body ? JSON.stringify(opts.body) : undefined
     }).then(function(res){
+      // A bootstrap-issued session token is short-lived by design; if it
+      // expires mid-visit, silently re-bootstrap once and retry the same
+      // call rather than surfacing an error the visitor can't act on. Not
+      // applicable to the legacy ?key=... flow - a permanent key doesn't
+      // expire, so a 401 there is a real error, not staleness.
+      if (res.status === 401 && WIDGET_CLIENT_ID && !isRetry) {
+        return bootstrapClient().then(function(){
+          var retryOpts = {};
+          for (var k in opts) retryOpts[k] = opts[k];
+          retryOpts._retry = true;
+          return api(path, retryOpts);
+        });
+      }
       return res.text().then(function(txt){
         var data = null;
         try { data = txt ? JSON.parse(txt) : null; } catch(e){ data = null; }
@@ -156,6 +175,11 @@
 
     var closeBtnHtml = '<button class="wg-close" id="wgClose" aria-label="Close chat">&times;</button>';
 
+    if (!API_BASE) {
+      root.innerHTML = '<div class="wg-window"><div class="wg-mini-head">' + closeBtnHtml + '</div><div class="wg-error-banner">Configuration error: API_BASE_URL is not set.</div></div>';
+      bind();
+      return;
+    }
     if (state.keyMissing) {
       root.innerHTML = '<div class="wg-window"><div class="wg-mini-head">' + closeBtnHtml + '</div><div class="wg-boot">No widget client specified in the URL (expected ?client=...).</div></div>';
       bind();
@@ -407,13 +431,11 @@
       });
   }
 
-  function bootstrapThenLoadBranding(){
-    if (WIDGET_KEY) {
-      // Already have a permanent key from ?key=..., nothing to bootstrap.
-      loadBranding();
-      return;
-    }
-    fetch(API_BASE + "/api/v1/public/widget/bootstrap/" + encodeURIComponent(WIDGET_CLIENT_ID))
+  // Extracted so both the initial bootstrap and a silent re-bootstrap on a
+  // stale/expired session token (see the 401 handling in api() above) can
+  // share it.
+  function bootstrapClient(){
+    return fetch(API_BASE + "/api/v1/public/widget/bootstrap/" + encodeURIComponent(WIDGET_CLIENT_ID))
       .then(function(res){
         return res.json().then(function(data){
           if (!res.ok) throw new Error((data && data.detail) || "Request failed (" + res.status + ")");
@@ -422,8 +444,18 @@
       })
       .then(function(data){
         WIDGET_KEY = data.session_token;
-        loadBranding();
-      })
+        return data;
+      });
+  }
+
+  function bootstrapThenLoadBranding(){
+    if (WIDGET_KEY) {
+      // Already have a permanent key from ?key=..., nothing to bootstrap.
+      loadBranding();
+      return;
+    }
+    bootstrapClient()
+      .then(function(){ loadBranding(); })
       .catch(function(err){
         state.bootstrapError = err.message;
         state.booting = false;

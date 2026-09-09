@@ -9,6 +9,7 @@ window.EDGIFY_CONFIG = {!! json_encode([
     'API_BASE_URL' => config('services.edgifynow.api_base_url'),
     'APP_BASE_URL' => config('services.edgifynow.app_base_url'),
     'WIDGET_BASE_URL' => config('services.edgifynow.widget_base_url'),
+    'FEATURE_VOICE_WHATSAPP' => config('services.edgifynow.feature_voice_whatsapp'),
 ], JSON_UNESCAPED_SLASHES) !!};
 </script>
 @if(!$envCheck['ok'])

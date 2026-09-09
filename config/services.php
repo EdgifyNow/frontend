@@ -44,6 +44,16 @@ return [
         'api_base_url' => env('API_BASE_URL', 'https://api-dev.edgifynow.com'),
         'app_base_url' => env('APP_BASE_URL', 'http://localhost'),
         'widget_base_url' => env('WIDGET_BASE_URL', 'http://localhost/edgifynow-portal-laravel/public/widget'),
+
+        // Voice and WhatsApp are not part of the V1 production scope (Portal +
+        // CRM + Knowledge/Assistant + Website Widget + Appointment/Calendar
+        // only). This hides the *enablement controls and dashboards* for them
+        // (Client Details toggles, the Assistant "WhatsApp" type option, the
+        // Voice/WhatsApp Activity nav items) without deleting any of that
+        // code - flip back to true to re-enable for testing. Default true so
+        // staging keeps exercising it; production's .env should set this to
+        // false.
+        'feature_voice_whatsapp' => env('FEATURE_VOICE_WHATSAPP', true),
     ],
 
 ];
