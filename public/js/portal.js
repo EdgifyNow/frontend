@@ -745,9 +745,14 @@
   // pretending to recompute "last month" would just be fabricated numbers.
   function adminDashboardHtml(){
     var allTenants = state.tenants || [];
-    var mrr = allTenants.filter(function(t){ return t.is_active; })
-      .reduce(function(sum, t){ return sum + (t.recurring_price_usd || 0); }, 0);
+    // "Active" here means status === "active" specifically - NOT the
+    // is_active operational flag, which is also true for trial clients
+    // (a trial is an active account, just not a paying one). Counting
+    // is_active double-counted trials in both the Active and Trial cards.
+    var activeCount = allTenants.filter(function(t){ return t.status === "active"; }).length;
     var trialCount = allTenants.filter(function(t){ return t.status === "trial"; }).length;
+    var mrr = allTenants.filter(function(t){ return t.status === "active"; })
+      .reduce(function(sum, t){ return sum + (t.recurring_price_usd || 0); }, 0);
     var aiUsageTotal = allTenants.reduce(function(sum, t){ return sum + (t.ai_usage_current_period || 0); }, 0);
 
     var filtered = overviewFilteredTenants();
@@ -797,7 +802,7 @@
       '</select></div>' +
       '<div class="eg-grid4" style="grid-template-columns:repeat(5,1fr)">' +
       metricCard({ label: "Total Clients", value: allTenants.length, color: "blue", icon: "users", sub: "All registered clients" }) +
-      metricCard({ label: "Active Clients", value: allTenants.filter(function(t){return t.is_active;}).length, color: "green", icon: "pulse", sub: "Currently active" }) +
+      metricCard({ label: "Active Clients", value: activeCount, color: "green", icon: "pulse", sub: "Status is active (excludes trials)" }) +
       metricCard({ label: "Monthly Recurring Revenue", value: "$" + mrr.toLocaleString(), color: "teal", icon: "dollar", sub: "Sum of monthly package fees" }) +
       metricCard({ label: "Trial Clients", value: trialCount, color: "amber", icon: "flask", sub: "In trial status" }) +
       metricCard({ label: "AI Usage This Period", value: aiUsageTotal.toLocaleString(), color: "purple", icon: "spark", sub: "Total AI interactions" }) +
