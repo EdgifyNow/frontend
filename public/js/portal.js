@@ -583,10 +583,32 @@
   // GET /api/v1/crm/contacts (joined client-side on contact_id) - both
   // already fetched by loadDashboardData(). Date/status filtering and
   // sorting happen here in the frontend, same as the mockup's api-note said.
-  function heroHtml(eyebrow, title, sub){
+  // Right-side hero artwork (browser window + rising chart), matching the
+  // design mockup - inline SVG so it themes with the gradient and needs no
+  // asset. Paired with the AUTOMATE/ENGAGE/CONVERT/GROW keyword strip.
+  function heroArt(){
+    return '<div class="eg-hero-art">' +
+      '<svg viewBox="0 0 190 130" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">' +
+      '<rect x="8" y="14" width="150" height="104" rx="10" fill="rgba(255,255,255,.14)" stroke="rgba(255,255,255,.5)" stroke-width="1.5"/>' +
+      '<circle cx="20" cy="26" r="2.4" fill="rgba(255,255,255,.7)"/><circle cx="29" cy="26" r="2.4" fill="rgba(255,255,255,.7)"/><circle cx="38" cy="26" r="2.4" fill="rgba(255,255,255,.7)"/>' +
+      '<line x1="8" y1="36" x2="158" y2="36" stroke="rgba(255,255,255,.4)" stroke-width="1.2"/>' +
+      '<rect x="26" y="88" width="16" height="20" rx="2" fill="rgba(255,255,255,.5)"/>' +
+      '<rect x="50" y="78" width="16" height="30" rx="2" fill="rgba(255,255,255,.62)"/>' +
+      '<rect x="74" y="66" width="16" height="42" rx="2" fill="rgba(255,255,255,.72)"/>' +
+      '<rect x="98" y="80" width="16" height="28" rx="2" fill="rgba(255,255,255,.55)"/>' +
+      '<rect x="122" y="56" width="16" height="52" rx="2" fill="rgba(255,255,255,.85)"/>' +
+      '<path d="M22 96 L58 84 L82 60 L110 74 L150 30" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>' +
+      '<path d="M139 28 L152 26 L150 40 Z" fill="#fff"/>' +
+      '</svg>' +
+      '<div class="eg-hero-kw"><span>AUTOMATE</span><span>ENGAGE</span><span>CONVERT</span><span>GROW</span><span></span></div>' +
+      '</div>';
+  }
+  function heroHtml(eyebrow, title, sub, withArt){
     return '<div class="eg-hero">' +
       (eyebrow ? '<div class="eg-hero-eyebrow">' + esc(eyebrow) + '</div>' : '') +
-      '<h2>' + esc(title) + '</h2><p>' + esc(sub) + '</p></div>';
+      '<h2>' + esc(title) + '</h2><p>' + esc(sub) + '</p>' +
+      (withArt ? heroArt() : '') +
+      '</div>';
   }
   function metricCard(o){
     return '<div class="eg-card eg-metric tint-' + o.color + '">' +
@@ -618,7 +640,7 @@
   }
 
   function clientDashboardHtml(){
-    var CLIENT_HERO = heroHtml("Welcome to EdgifyNow", "Turn Conversations Into Business", "Manage your AI assistant, leads, appointments and channels in one powerful workspace.");
+    var CLIENT_HERO = heroHtml("Welcome to EdgifyNow", "Turn Conversations Into Business", "Manage your AI assistant, leads, appointments and channels in one powerful workspace.", true);
     if (!state.leads || !state.contacts) {
       return CLIENT_HERO + '<div class="eg-card"><div class="eg-empty">Loading...</div></div>';
     }
@@ -767,7 +789,7 @@
       '<button class="eg-btn ghost" style="padding:6px 10px" id="egOverviewNext"' + (state.overviewPage >= totalPages ? " disabled" : "") + '>&rsaquo;</button>' +
       '</div></div>';
 
-    return heroHtml(null, "Run the Platform. Grow the Business.", "Monitor clients, usage, revenue and platform activity from one place.") +
+    return '<div class="eg-hero eg-hero-img"><img src="img/admin-banner.jpg" alt="Run the Platform. Grow the Business. Monitor clients, usage, revenue and platform activity from one place." /></div>' +
       '<div class="eg-row" style="margin-bottom:14px">' +
       '<div></div>' +
       '<select class="eg-select" id="egOverviewDateFilter" style="width:auto">' +
