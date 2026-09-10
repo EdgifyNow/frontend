@@ -423,20 +423,18 @@
     if (isAdmin()) {
       return [
         { id: "dashboard", label: "Overview", icon: "◉" },
-        { id: "tenants", label: "Clients", icon: "▦" },
-        { id: "demo", label: "Instant Demo", icon: "⚡" }
+        { id: "tenants", label: "Clients", icon: "▦" }
       ];
     }
-    // Instant Demo is intentionally admin-only (tracker item #14: "only
-    // Admin account should have it") - a client demonstrating their own
-    // assistant already has the real thing (AI Assistant tab); Instant Demo
-    // exists so an EdgifyNow admin can show a prospect a live result without
-    // that prospect needing their own account yet.
+    // Instant Demo lives in the client portal: it uploads a doc and asks the
+    // live assistant, both scoped to a tenant via the caller's JWT - an admin
+    // has no tenant context, so it only works for a client account.
     var items = [
       { id: "dashboard", label: "Dashboard", icon: "◉" },
       { id: "leads", label: "Leads & Contacts", icon: "◫" },
       { id: "knowledge", label: "Knowledge", icon: "▤" },
       { id: "assistant", label: "AI Assistant", icon: "◎" },
+      { id: "demo", label: "Instant Demo", icon: "⚡" },
       { id: "integrations", label: "Integrations", icon: "⚿" }
     ];
     // Voice Activity is a real-time operational dashboard, only meaningful
@@ -551,7 +549,7 @@
   // sorting happen here in the frontend, same as the mockup's api-note said.
   function clientDashboardHtml(){
     if (!state.leads || !state.contacts) {
-      return '<div class="eg-hero"><h2>CRM daily view</h2><p>Simple raw lead visibility - no overdue scoring, no extra workflow logic.</p></div>' +
+      return '<div class="eg-hero"><h2>Turn Conversations Into Business.</h2><p>Track leads, appointments and AI activity from one simple workspace.</p></div>' +
         '<div class="eg-card"><div class="eg-empty">Loading...</div></div>';
     }
 
@@ -595,7 +593,7 @@
         '<td class="eg-small eg-muted">' + fmtDate(r.last_activity_at || r.created_at) + '</td></tr>';
     }).join("");
 
-    return '<div class="eg-hero"><h2>CRM daily view</h2><p>Simple raw lead visibility - no overdue scoring, no extra workflow logic.</p></div>' +
+    return '<div class="eg-hero"><h2>Turn Conversations Into Business.</h2><p>Track leads, appointments and AI activity from one simple workspace.</p></div>' +
       '<div class="eg-grid4">' +
       '<div class="eg-card eg-metric"><div class="eg-label">Leads This Month</div><div class="eg-value">' + monthCount + '</div></div>' +
       '<div class="eg-card eg-metric"><div class="eg-label">New</div><div class="eg-value">' + newCount + '</div></div>' +
@@ -691,7 +689,8 @@
       '<button class="eg-btn ghost" style="padding:6px 10px" id="egOverviewNext"' + (state.overviewPage >= totalPages ? " disabled" : "") + '>&rsaquo;</button>' +
       '</div></div>';
 
-    return '<div class="eg-row" style="margin-bottom:14px">' +
+    return '<div class="eg-hero"><h2>Run the Platform. Grow the Business.</h2><p>Monitor clients, usage, revenue and platform activity from one place.</p></div>' +
+      '<div class="eg-row" style="margin-bottom:14px">' +
       '<div></div>' +
       '<select class="eg-select" id="egOverviewDateFilter" style="width:auto">' +
       selOpts([{value:"month",label:"This Month"},{value:"last_month",label:"Last Month"},{value:"quarter",label:"This Quarter"},{value:"all",label:"All Time"}], state.overviewDateFilter) +
