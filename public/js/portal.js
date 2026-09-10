@@ -79,6 +79,37 @@
     if (s === null || s === undefined) return "";
     return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
   }
+
+  // Small inline-SVG icon set (solid, currentColor) - used for nav items,
+  // metric card badges and card headers so the portal matches the design
+  // mockup instead of leaning on unicode glyphs that render differently
+  // per OS/font.
+  var EG_ICONS = {
+    home: 'M10 2.3 2.4 8.7A1 1 0 0 0 2 9.5V17a1 1 0 0 0 1 1h4v-5h6v5h4a1 1 0 0 0 1-1V9.5a1 1 0 0 0-.4-.8z',
+    users: 'M7 3a3 3 0 1 1 0 6 3 3 0 0 1 0-6Zm6.5 1a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5ZM2 16.5C2 13.9 4.2 12 7 12s5 1.9 5 4.5V18H2Zm11-4.5c2.5 0 5 1.5 5 4.4V18h-4.4v-1.5c0-1.6-.6-3-1.6-4.2.3-.03.6-.05 1-.05Z',
+    play: 'M6 3.6v12.8a.6.6 0 0 0 .9.5l10-6.4a.6.6 0 0 0 0-1L6.9 3.1a.6.6 0 0 0-.9.5z',
+    contacts: 'M5 2.5h7.5A1.5 1.5 0 0 1 14 4v12a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 16V4A1.5 1.5 0 0 1 5 2.5Zm10.5 3H17a.5.5 0 0 1 .5.5v8a.5.5 0 0 1-.5.5h-1.5z',
+    book: 'M5 2.5h6.5a1 1 0 0 1 1 1v12.7l-3.6-1.8a1 1 0 0 0-.9 0L4.5 16.2V3.5a1 1 0 0 1 1-1zm9 0h1.5a1 1 0 0 1 1 1v12l-2.5-1.25z',
+    spark: 'M10 1.6l1.9 4.8a2 2 0 0 0 1.7 1.7l4.8 1.9-4.8 1.9a2 2 0 0 0-1.7 1.7L10 18.4l-1.9-4.8a2 2 0 0 0-1.7-1.7L1.6 10l4.8-1.9a2 2 0 0 0 1.7-1.7z',
+    plug: 'M7 2a1 1 0 0 1 1 1v3h4V3a1 1 0 1 1 2 0v3h.5a1 1 0 0 1 1 1v2A5.5 5.5 0 0 1 11 15.4V18a1 1 0 1 1-2 0v-2.6A5.5 5.5 0 0 1 3.5 10V7a1 1 0 0 1 1-1H5V3a1 1 0 0 1 1-1z',
+    phone: 'M3.7 3 6.2 2.2l2 4.1-1.9 1.2a10 10 0 0 0 4 4l1.2-1.9 4.1 2-.8 2.5C11.4 16.6 3.6 8.8 3.7 3z',
+    chat: 'M3.5 3.5h13A1.5 1.5 0 0 1 18 5v8a1.5 1.5 0 0 1-1.5 1.5H8.4L4 18v-3.5H3.5A1.5 1.5 0 0 1 2 13V5a1.5 1.5 0 0 1 1.5-1.5z',
+    pulse: 'M2 11h3.4l1.9-4.6a.8.8 0 0 1 1.5 0l2.8 8.7 1.5-3.6a.8.8 0 0 1 .7-.5H18v2h-3.5l-2.2 5.3a.8.8 0 0 1-1.5 0L8 9.1 6.8 11.5a.8.8 0 0 1-.8.5H2z',
+    dollar: 'M9 2h2v2.1c1.2.1 2.3.5 3.1 1.1l-1.1 1.6A4 4 0 0 0 10 6c-1.3 0-2.2.5-2.2 1.4 0 .8.7 1.2 2.5 1.6 2.3.5 3.9 1.3 3.9 3.4 0 1.8-1.3 3-3.2 3.4V18H9v-2c-1.5-.1-2.8-.7-3.8-1.5l1.2-1.6c.9.8 2 1.2 3.1 1.2 1.4 0 2.3-.5 2.3-1.5 0-.8-.6-1.2-2.5-1.6C6.6 8.9 5 8.1 5 6c0-1.8 1.3-3 4-3.3z',
+    flask: 'M7.5 2h5v1.8h-1v4.7l3.9 6.5A2 2 0 0 1 13.7 18H6.3a2 2 0 0 1-1.7-3l3.9-6.5V3.8h-1z',
+    doc: 'M5 2h6l4 4v10.5A1.5 1.5 0 0 1 13.5 18h-8A1.5 1.5 0 0 1 4 16.5v-13A1.5 1.5 0 0 1 5.5 2zm5.5 1.4V6h2.6z',
+    funnel: 'M3 3.5h14a.6.6 0 0 1 .46 1L12.4 10.6a1 1 0 0 0-.24.65V16l-3.3 1.65A.4.4 0 0 1 8 17.3v-6.05a1 1 0 0 0-.24-.65L2.54 4.5A.6.6 0 0 1 3 3.5z',
+    trophy: 'M5.5 3h9v3.6a4.5 4.5 0 0 1-9 0zM4 4v1.4A3.5 3.5 0 0 0 6 8.6M16 4v1.4A3.5 3.5 0 0 1 14 8.6M8.5 12h3v2.5h-3zM6 16h8v1.8H6z',
+    flag: 'M4 2a1 1 0 0 1 1 1v.5h9.5a.5.5 0 0 1 .42.77L13.3 7.5l1.62 3.23a.5.5 0 0 1-.42.77H5V17a1 1 0 1 1-2 0V3a1 1 0 0 1 1-1z',
+    clock: 'M10 2a8 8 0 1 0 0 16 8 8 0 0 0 0-16zm.9 4a.9.9 0 0 0-1.8 0v4c0 .3.15.58.4.75l3 2a.9.9 0 1 0 1-1.5L10.9 9.5z',
+    logout: 'M7 2h4a1 1 0 0 1 0 2H7a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h4a1 1 0 1 1 0 2H7a3 3 0 0 1-3-3V5a3 3 0 0 1 3-3zm7.3 4.3 3 3a1 1 0 0 1 0 1.4l-3 3a1 1 0 0 1-1.4-1.4L14.1 11H9a1 1 0 1 1 0-2h5.1l-1.2-1.3a1 1 0 0 1 1.4-1.4z'
+  };
+  function egIcon(name, size){
+    var d = EG_ICONS[name];
+    if (!d) return "";
+    var s = size || 18;
+    return '<svg class="eg-ic" viewBox="0 0 20 20" width="' + s + '" height="' + s + '" fill="currentColor" aria-hidden="true"><path d="' + d + '"/></svg>';
+  }
   function fmtDate(d){
     if (!d) return "-";
     try { return new Date(d).toLocaleString(); } catch(e){ return d; }
@@ -422,20 +453,20 @@
   function navItems(){
     if (isAdmin()) {
       return [
-        { id: "dashboard", label: "Overview", icon: "◉" },
-        { id: "tenants", label: "Clients", icon: "▦" }
+        { id: "dashboard", label: "Overview", icon: "home" },
+        { id: "tenants", label: "Clients", icon: "users" }
       ];
     }
     // Instant Demo lives in the client portal: it uploads a doc and asks the
     // live assistant, both scoped to a tenant via the caller's JWT - an admin
     // has no tenant context, so it only works for a client account.
     var items = [
-      { id: "dashboard", label: "Dashboard", icon: "◉" },
-      { id: "leads", label: "Leads & Contacts", icon: "◫" },
-      { id: "knowledge", label: "Knowledge", icon: "▤" },
-      { id: "assistant", label: "AI Assistant", icon: "◎" },
-      { id: "demo", label: "Instant Demo", icon: "⚡" },
-      { id: "integrations", label: "Integrations", icon: "⚿" }
+      { id: "dashboard", label: "Dashboard", icon: "home" },
+      { id: "leads", label: "Leads & Contacts", icon: "contacts" },
+      { id: "knowledge", label: "Knowledge", icon: "book" },
+      { id: "assistant", label: "AI Assistant", icon: "spark" },
+      { id: "demo", label: "Instant Demo", icon: "play" },
+      { id: "integrations", label: "Integrations", icon: "plug" }
     ];
     // Voice Activity is a real-time operational dashboard, only meaningful
     // (and only shown) once this tenant's voice channel is enabled - see
@@ -445,10 +476,10 @@
     // aren't in V1 scope, so this stays hidden for every tenant in
     // production regardless of their own per-tenant enablement.
     if (featureVoiceWhatsapp() && state.tenantSelf && state.tenantSelf.voice_enabled) {
-      items.splice(3, 0, { id: "voice", label: "Voice Activity", icon: "☎" });
+      items.splice(3, 0, { id: "voice", label: "Voice Activity", icon: "phone" });
     }
     if (featureVoiceWhatsapp() && state.tenantSelf && state.tenantSelf.whatsapp_enabled) {
-      items.splice(3, 0, { id: "whatsapp", label: "WhatsApp Activity", icon: "◆" });
+      items.splice(3, 0, { id: "whatsapp", label: "WhatsApp Activity", icon: "chat" });
     }
     return items;
   }
@@ -458,8 +489,12 @@
     var navHtml = items.map(function(it){
       var isActive = state.view === it.id || (it.id === "tenants" && state.view === "tenantDetail");
       var cls = "eg-navitem" + (isActive ? " active" : "");
-      return '<div class="' + cls + '" data-nav="' + it.id + '">' + it.icon + ' ' + esc(it.label) + '</div>';
+      return '<div class="' + cls + '" data-nav="' + it.id + '">' + egIcon(it.icon) + '<span>' + esc(it.label) + '</span></div>';
     }).join("");
+
+    var sidebarFoot = isAdmin()
+      ? '<div class="eg-sidebar-foot"><b>Smarter AI.</b>Stronger Businesses.</div>'
+      : '<div class="eg-sidebar-foot"><b>Better conversations.</b>Bigger business.<div style="margin-top:8px;opacity:.7">EdgifyNow Client v1.0.0</div></div>';
 
     var roleLabel = isAdmin() ? "Platform Admin" : (state.user.role === "owner" ? "Owner" : "Employee");
     var initials = (state.user.email || "U").substring(0,2).toUpperCase();
@@ -475,7 +510,8 @@
       '<div class="eg-brand">EdgifyNow <span>' + (isAdmin() ? "Admin" : "Client") + '</span></div>' +
       '<div class="eg-navgroup">' + (isAdmin() ? "Platform" : "Workspace") + '</div>' +
       navHtml +
-      '<div class="eg-navitem logout" data-nav="logout">✕ Log out</div>' +
+      '<div class="eg-navitem logout" data-nav="logout">' + egIcon("logout") + '<span>Log out</span></div>' +
+      sidebarFoot +
       '</aside>' +
       '<main class="eg-main">' +
       '<div class="eg-topbar">' +
@@ -547,18 +583,58 @@
   // GET /api/v1/crm/contacts (joined client-side on contact_id) - both
   // already fetched by loadDashboardData(). Date/status filtering and
   // sorting happen here in the frontend, same as the mockup's api-note said.
+  function heroHtml(eyebrow, title, sub){
+    return '<div class="eg-hero">' +
+      (eyebrow ? '<div class="eg-hero-eyebrow">' + esc(eyebrow) + '</div>' : '') +
+      '<h2>' + esc(title) + '</h2><p>' + esc(sub) + '</p></div>';
+  }
+  function metricCard(o){
+    return '<div class="eg-card eg-metric tint-' + o.color + '">' +
+      '<div class="eg-ic-badge c-' + o.color + '">' + egIcon(o.icon, 18) + '</div>' +
+      '<div class="eg-label">' + esc(o.label) + '</div>' +
+      '<div class="eg-value">' + o.value + '</div>' +
+      (o.sub ? '<div class="eg-metric-sub">' + o.sub + '</div>' : '') +
+      (o.trend || '') +
+      '</div>';
+  }
+  // Trend line for a metric card. Only shown where there's a real prior
+  // period to compare against - "no change" (rather than a fabricated
+  // percentage) when there isn't.
+  function trendLine(current, prior, unit){
+    if (prior === null || prior === undefined) return '<div class="eg-metric-trend flat">&mdash; No change</div>';
+    if (!prior) {
+      return current > 0
+        ? '<div class="eg-metric-trend up">&#8599; up ' + unit + '</div>'
+        : '<div class="eg-metric-trend flat">&mdash; No change</div>';
+    }
+    var pct = Math.round(((current - prior) / prior) * 100);
+    if (pct === 0) return '<div class="eg-metric-trend flat">&mdash; No change ' + unit + '</div>';
+    return '<div class="eg-metric-trend ' + (pct > 0 ? "up" : "flat") + '">' + (pct > 0 ? "&#8599; +" : "&#8600; ") + pct + '% ' + unit + '</div>';
+  }
+  function cardHead(icon, title, linkText, linkGoto){
+    return '<div class="eg-cardhead"><span class="eg-ic-badge-sm">' + egIcon(icon, 15) + '</span><h3>' + esc(title) + '</h3>' +
+      (linkText ? '<span class="eg-cardlink" data-goto="' + esc(linkGoto) + '">' + esc(linkText) + ' &rarr;</span>' : '') +
+      '</div>';
+  }
+
   function clientDashboardHtml(){
+    var CLIENT_HERO = heroHtml("Welcome to EdgifyNow", "Turn Conversations Into Business", "Manage your AI assistant, leads, appointments and channels in one powerful workspace.");
     if (!state.leads || !state.contacts) {
-      return '<div class="eg-hero"><h2>Turn Conversations Into Business.</h2><p>Track leads, appointments and AI activity from one simple workspace.</p></div>' +
-        '<div class="eg-card"><div class="eg-empty">Loading...</div></div>';
+      return CLIENT_HERO + '<div class="eg-card"><div class="eg-empty">Loading...</div></div>';
     }
 
     var rows = joinedLeads();
     var now = new Date();
-    var monthCount = rows.filter(function(r){
-      var d = new Date(r.created_at);
-      return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
-    }).length;
+    var inMonth = function(d, offset){
+      var m = now.getMonth() + (offset || 0), y = now.getFullYear();
+      while (m < 0) { m += 12; y -= 1; }
+      return d.getFullYear() === y && d.getMonth() === m;
+    };
+    var monthCount = rows.filter(function(r){ return inMonth(new Date(r.created_at)); }).length;
+    var lastMonthCount = rows.filter(function(r){ return inMonth(new Date(r.created_at), -1); }).length;
+    var wkAgo = now.getTime() - 7 * 864e5, twoWkAgo = now.getTime() - 14 * 864e5;
+    var newThisWk = rows.filter(function(r){ var t = new Date(r.created_at).getTime(); return t >= wkAgo; }).length;
+    var newLastWk = rows.filter(function(r){ var t = new Date(r.created_at).getTime(); return t >= twoWkAgo && t < wkAgo; }).length;
     var newCount = rows.filter(function(r){ return r.status === "new"; }).length;
     var qualifiedCount = rows.filter(function(r){ return r.status === "qualified"; }).length;
     var wonCount = rows.filter(function(r){ return r.status === "won"; }).length;
@@ -593,18 +669,20 @@
         '<td class="eg-small eg-muted">' + fmtDate(r.last_activity_at || r.created_at) + '</td></tr>';
     }).join("");
 
-    return '<div class="eg-hero"><h2>Turn Conversations Into Business.</h2><p>Track leads, appointments and AI activity from one simple workspace.</p></div>' +
+    return CLIENT_HERO +
       '<div class="eg-grid4">' +
-      '<div class="eg-card eg-metric"><div class="eg-label">Leads This Month</div><div class="eg-value">' + monthCount + '</div></div>' +
-      '<div class="eg-card eg-metric"><div class="eg-label">New</div><div class="eg-value">' + newCount + '</div></div>' +
-      '<div class="eg-card eg-metric"><div class="eg-label">Qualified</div><div class="eg-value">' + qualifiedCount + '</div></div>' +
-      '<div class="eg-card eg-metric"><div class="eg-label">Won</div><div class="eg-value">' + wonCount + '</div></div>' +
+      metricCard({ label: "Leads This Month", value: monthCount, color: "blue", icon: "users", trend: trendLine(monthCount, lastMonthCount, "from last month") }) +
+      metricCard({ label: "New", value: newCount, color: "green", icon: "doc", trend: trendLine(newThisWk, newLastWk, "from last week") }) +
+      metricCard({ label: "Qualified", value: qualifiedCount, color: "amber", icon: "funnel", trend: trendLine(qualifiedCount, null) }) +
+      metricCard({ label: "Won", value: wonCount, color: "purple", icon: "trophy", trend: trendLine(wonCount, null) }) +
       '</div>' +
       '<div class="eg-grid2">' +
-      '<div class="eg-card"><h3>New leads today</h3><p class="eg-small eg-muted" style="margin-top:-8px">Created today, newest first.</p>' +
+      '<div class="eg-card">' + cardHead("flag", "New leads today", "View all leads", "leads") +
+      '<p class="eg-small eg-muted" style="margin:2px 0 12px">Created today, newest first.</p>' +
       (todayHtml ? '<table class="eg-table"><thead><tr><th>Lead</th><th>Interest</th><th>Source</th><th>Time</th><th>Status</th></tr></thead><tbody>' + todayHtml + '</tbody></table>' : '<div class="eg-empty">No leads today.</div>') +
       '</div>' +
-      '<div class="eg-card"><h3>This week&rsquo;s attention</h3><p class="eg-small eg-muted" style="margin-top:-8px">Open leads with activity this week, newest activity first.</p>' +
+      '<div class="eg-card">' + cardHead("clock", "This week's attention", "View all activity", "leads") +
+      '<p class="eg-small eg-muted" style="margin:2px 0 12px">Open leads with activity this week, newest activity first.</p>' +
       (weekHtml ? '<table class="eg-table"><thead><tr><th>Lead</th><th>Interest</th><th>Source</th><th>Status</th><th>Last activity</th></tr></thead><tbody>' + weekHtml + '</tbody></table>' : '<div class="eg-empty">Nothing needs attention this week.</div>') +
       '</div>' +
       '</div>';
@@ -689,20 +767,21 @@
       '<button class="eg-btn ghost" style="padding:6px 10px" id="egOverviewNext"' + (state.overviewPage >= totalPages ? " disabled" : "") + '>&rsaquo;</button>' +
       '</div></div>';
 
-    return '<div class="eg-hero"><h2>Run the Platform. Grow the Business.</h2><p>Monitor clients, usage, revenue and platform activity from one place.</p></div>' +
+    return heroHtml(null, "Run the Platform. Grow the Business.", "Monitor clients, usage, revenue and platform activity from one place.") +
       '<div class="eg-row" style="margin-bottom:14px">' +
       '<div></div>' +
       '<select class="eg-select" id="egOverviewDateFilter" style="width:auto">' +
       selOpts([{value:"month",label:"This Month"},{value:"last_month",label:"Last Month"},{value:"quarter",label:"This Quarter"},{value:"all",label:"All Time"}], state.overviewDateFilter) +
       '</select></div>' +
       '<div class="eg-grid4" style="grid-template-columns:repeat(5,1fr)">' +
-      '<div class="eg-card eg-metric"><div class="eg-label">Total Clients</div><div class="eg-value">' + allTenants.length + '</div><div class="eg-small eg-muted">All registered clients</div></div>' +
-      '<div class="eg-card eg-metric"><div class="eg-label">Active Clients</div><div class="eg-value">' + allTenants.filter(function(t){return t.is_active;}).length + '</div><div class="eg-small eg-muted">Currently active</div></div>' +
-      '<div class="eg-card eg-metric"><div class="eg-label">Monthly Recurring Revenue</div><div class="eg-value">$' + mrr.toLocaleString() + '</div><div class="eg-small eg-muted">Sum of monthly package fees</div></div>' +
-      '<div class="eg-card eg-metric"><div class="eg-label">Trial Clients</div><div class="eg-value">' + trialCount + '</div><div class="eg-small eg-muted">In trial status</div></div>' +
-      '<div class="eg-card eg-metric"><div class="eg-label">AI Usage This Period</div><div class="eg-value">' + aiUsageTotal.toLocaleString() + '</div><div class="eg-small eg-muted">Total AI interactions</div></div>' +
+      metricCard({ label: "Total Clients", value: allTenants.length, color: "blue", icon: "users", sub: "All registered clients" }) +
+      metricCard({ label: "Active Clients", value: allTenants.filter(function(t){return t.is_active;}).length, color: "green", icon: "pulse", sub: "Currently active" }) +
+      metricCard({ label: "Monthly Recurring Revenue", value: "$" + mrr.toLocaleString(), color: "teal", icon: "dollar", sub: "Sum of monthly package fees" }) +
+      metricCard({ label: "Trial Clients", value: trialCount, color: "amber", icon: "flask", sub: "In trial status" }) +
+      metricCard({ label: "AI Usage This Period", value: aiUsageTotal.toLocaleString(), color: "purple", icon: "spark", sub: "Total AI interactions" }) +
       '</div>' +
-      '<div class="eg-card"><div class="eg-row"><div><h3 style="margin-bottom:2px">Client health</h3><div class="eg-small eg-muted">Overview of all clients and their current status, package and usage.</div></div>' +
+      '<div class="eg-card"><div class="eg-row"><div>' + cardHead("pulse", "Client health") +
+      '<div class="eg-small eg-muted" style="margin-top:2px">Overview of all clients and their current status, package and usage.</div></div>' +
       '<div style="display:flex;gap:10px"><input class="eg-input" id="egOverviewSearch" placeholder="Search clients..." value="' + esc(state.overviewSearch) + '" style="width:220px" /><button class="eg-btn" data-goto="tenants">Manage clients</button></div></div>' +
       (rows ? '<table class="eg-table"><thead><tr><th>Client</th><th>Status</th><th>Package</th><th>Usage</th><th>Allowance</th><th>Created</th><th>Last Updated</th><th>Actions</th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div class="eg-empty">' + (state.overviewSearch ? "No matching clients." : "No clients yet.") + '</div>') +
       (filtered.length ? pagerHtml : "") +
