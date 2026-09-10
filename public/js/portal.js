@@ -640,7 +640,7 @@
   }
 
   function clientDashboardHtml(){
-    var CLIENT_HERO = heroHtml("Welcome to EdgifyNow", "Turn Conversations Into Business", "Manage your AI assistant, leads, appointments and channels in one powerful workspace.", true);
+    var CLIENT_HERO = '<div class="eg-hero eg-hero-img"><img src="img/client-banner.jpg" alt="Welcome to EdgifyNow. Turn Conversations Into Business. Manage your AI assistant, leads, appointments and channels in one powerful workspace." /></div>';
     if (!state.leads || !state.contacts) {
       return CLIENT_HERO + '<div class="eg-card"><div class="eg-empty">Loading...</div></div>';
     }
