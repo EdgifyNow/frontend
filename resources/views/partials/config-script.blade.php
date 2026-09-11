@@ -10,6 +10,7 @@ window.EDGIFY_CONFIG = {!! json_encode([
     'APP_BASE_URL' => config('services.edgifynow.app_base_url'),
     'WIDGET_BASE_URL' => config('services.edgifynow.widget_base_url'),
     'FEATURE_VOICE_WHATSAPP' => config('services.edgifynow.feature_voice_whatsapp'),
+    'SESSION_IDLE_TIMEOUT_MINUTES' => config('services.edgifynow.session_idle_timeout_minutes'),
 ], JSON_UNESCAPED_SLASHES) !!};
 </script>
 @if(!$envCheck['ok'])

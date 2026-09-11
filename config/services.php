@@ -54,6 +54,10 @@ return [
         // staging keeps exercising it; production's .env should set this to
         // false.
         'feature_voice_whatsapp' => env('FEATURE_VOICE_WHATSAPP', true),
+        // Minutes of no mouse/keyboard/touch activity before the client
+        // portal auto logs out. Client requested a 10 minute default,
+        // configurable per environment without a code change.
+        'session_idle_timeout_minutes' => env('SESSION_IDLE_TIMEOUT_MINUTES', 10),
     ],
 
 ];

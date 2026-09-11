@@ -6,6 +6,12 @@
   // production - render() below blocks with a visible error instead.
   var API_BASE = (window.EDGIFY_CONFIG && window.EDGIFY_CONFIG.API_BASE_URL) || "";
   var TOKEN_KEY = "eg_portal_token";
+  // Auto logout after this many minutes of no mouse/keyboard/touch activity,
+  // per the client's request that a login should not stay valid forever.
+  // Config-driven with a 10 minute fallback so it can be tuned per
+  // environment without a code change.
+  var SESSION_IDLE_TIMEOUT_MINUTES = (window.EDGIFY_CONFIG && window.EDGIFY_CONFIG.SESSION_IDLE_TIMEOUT_MINUTES) || 10;
+  var idleTimer = null;
   var root = document.getElementById("egApp");
   function AND(){ for (var i=0;i<arguments.length;i++){ if(!arguments[i]) return false; } return true; }
 
@@ -35,10 +41,12 @@
     tenants: null,
     selectedAssistantId: null,
     chatLog: [],
+    chatConversationId: null,
     toast: null,
     demoDoc: null,
     demoPolling: false,
     demoChatLog: [],
+    demoChatConversationId: null,
     demoLeadResult: null,
     tenantDetail: null,
     tenantDetailId: null,
@@ -66,11 +74,13 @@
     voiceCaptures: null,
     voiceSearch: "",
     voiceStatusFilter: "all",
+    voiceHideTest: false,
     voiceDrawerId: null,
     voiceDrawerDetail: null,
     whatsappCaptures: null,
     whatsappSearch: "",
     whatsappStatusFilter: "all",
+    whatsappHideTest: false,
     whatsappDrawerId: null,
     whatsappDrawerDetail: null
   };
@@ -274,8 +284,24 @@
     localStorage.removeItem(TOKEN_KEY);
     state.leads = state.contacts = state.documents = state.assistants = state.tenants = null;
     state.view = "dashboard";
+    stopIdleTimer();
     render();
   }
+
+  function stopIdleTimer(){
+    if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+  }
+  function resetIdleTimer(){
+    if (!state.token) { stopIdleTimer(); return; }
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(function(){
+      doLogout();
+      showToast("You were signed out after " + SESSION_IDLE_TIMEOUT_MINUTES + " minutes of inactivity", true);
+    }, SESSION_IDLE_TIMEOUT_MINUTES * 60 * 1000);
+  }
+  ["mousedown", "mousemove", "keydown", "scroll", "touchstart"].forEach(function(evt){
+    document.addEventListener(evt, resetIdleTimer, { passive: true });
+  });
 
   function doLogin(email, password){
     state.error = null;
@@ -291,6 +317,7 @@
         state.user = me;
         state.loading = false;
         state.view = "dashboard";
+        resetIdleTimer();
         render();
         loadDashboardData();
       })
@@ -306,6 +333,7 @@
       api("/api/v1/auth/me").then(function(me){
         state.user = me;
         state.booting = false;
+        resetIdleTimer();
         render();
         loadDashboardData();
       }).catch(function(){
@@ -1068,7 +1096,7 @@
   var CHANNEL_ACTIVITY = {
     voice: {
       key: "voice",
-      captures: "voiceCaptures", search: "voiceSearch", statusFilter: "voiceStatusFilter",
+      captures: "voiceCaptures", search: "voiceSearch", statusFilter: "voiceStatusFilter", hideTest: "voiceHideTest",
       drawerId: "voiceDrawerId", drawerDetail: "voiceDrawerDetail",
       idPrefix: "egVoice", contactLabel: "Caller",
       emptyMessage: "No voice activity yet. Once your assistant takes a call, captured orders, appointments, and leads will show up here.",
@@ -1076,7 +1104,7 @@
     },
     whatsapp: {
       key: "whatsapp",
-      captures: "whatsappCaptures", search: "whatsappSearch", statusFilter: "whatsappStatusFilter",
+      captures: "whatsappCaptures", search: "whatsappSearch", statusFilter: "whatsappStatusFilter", hideTest: "whatsappHideTest",
       drawerId: "whatsappDrawerId", drawerDetail: "whatsappDrawerDetail",
       idPrefix: "egWhatsapp", contactLabel: "Contact",
       emptyMessage: "No WhatsApp activity yet. Once your assistant captures an order, appointment, or lead over WhatsApp, it will show up here.",
@@ -1096,6 +1124,7 @@
     params.set("channel", cfg.key);
     if (state[cfg.statusFilter] !== "all") params.set("status_filter", state[cfg.statusFilter]);
     if (state[cfg.search]) params.set("search", state[cfg.search]);
+    if (state[cfg.hideTest]) params.set("is_test", "false");
     api("/api/v1/crm/voice-captures?" + params.toString()).then(function(d){
       state[cfg.captures] = d;
       render();
@@ -1122,6 +1151,7 @@
         return '<option value="' + s + '"' + (s === state[cfg.statusFilter] ? " selected" : "") + '>' + (s === "all" ? "All statuses" : channelStatusLabel(s)) + '</option>';
       }).join("") +
       '</select>' +
+      '<label class="eg-small" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="' + cfg.idPrefix + 'HideTest"' + (state[cfg.hideTest] ? ' checked' : '') + ' />Hide my own test messages</label>' +
       '</div>';
 
     var captures = state[cfg.captures];
@@ -1132,7 +1162,7 @@
       var color = CHANNEL_STATUS_COLOR[v.status] || "gray";
       return '<div class="eg-vtile ' + color + '" data-channel-drawer="' + cfg.key + '" data-channel-drawer-id="' + esc(v.id) + '">' +
         '<div class="eg-vtile-top">' +
-        '<div><div class="eg-vtile-name">' + esc(v.contact.name || "Unknown") + '</div>' +
+        '<div><div class="eg-vtile-name">' + esc(v.contact.name || "Unknown") + (v.contact.is_test ? ' <span class="eg-tag" style="background:#f7d774">TEST</span>' : '') + '</div>' +
         '<div class="eg-vtile-phone">' + esc(v.contact.phone || "-") + '</div></div>' +
         '<span class="eg-pill ' + color + '">' + channelStatusLabel(v.status) + '</span>' +
         '</div>' +
@@ -1155,6 +1185,11 @@
     var statusFilterEl = document.getElementById(cfg.idPrefix + "StatusFilter");
     if (statusFilterEl) statusFilterEl.addEventListener("change", function(){
       state[cfg.statusFilter] = statusFilterEl.value;
+      loadChannelCaptures(cfg);
+    });
+    var hideTestEl = document.getElementById(cfg.idPrefix + "HideTest");
+    if (hideTestEl) hideTestEl.addEventListener("change", function(){
+      state[cfg.hideTest] = hideTestEl.checked;
       loadChannelCaptures(cfg);
     });
     document.querySelectorAll('[data-channel-drawer="' + cfg.key + '"]').forEach(function(el){
@@ -1188,7 +1223,7 @@
     return '<div class="eg-drawer-backdrop open" id="' + backdropId + '"></div>' +
       '<aside class="eg-drawer open">' +
       '<button class="eg-drawer-close" id="' + cfg.idPrefix + 'DrawerClose" aria-label="Close">&times;</button>' +
-      '<h2>' + esc(d.contact.name || "Unknown") + '</h2>' +
+      '<h2>' + esc(d.contact.name || "Unknown") + (d.contact.is_test ? ' <span class="eg-tag" style="background:#f7d774">TEST</span>' : '') + '</h2>' +
       '<div class="eg-drawer-sub">' + esc(channelTypeLabel(d.capture_type)) + '</div>' +
       '<h4>' + esc(cfg.contactLabel) + '</h4>' +
       '<div class="eg-kv"><span>Phone</span><b>' + esc(d.contact.phone || "-") + '</b></div>' +
@@ -1521,6 +1556,7 @@
       el.addEventListener("click", function(){
         state.selectedAssistantId = el.getAttribute("data-assistant-select");
         state.chatLog = [];
+        state.chatConversationId = null;
         render();
       });
     });
@@ -1560,8 +1596,11 @@
         state.chatLog.push({ who: "me", text: msg });
         input.value = "";
         render();
-        api("/api/v1/assistant/chat", { method: "POST", body: { message: msg } })
+        var chatBody = { message: msg };
+        if (state.chatConversationId) chatBody.conversation_id = state.chatConversationId;
+        api("/api/v1/assistant/chat", { method: "POST", body: chatBody })
           .then(function(data){
+            state.chatConversationId = data.conversation_id;
             state.chatLog.push({ who: "bot", text: data.answer });
             render();
             var box = document.getElementById("egChatMessages");
@@ -1741,6 +1780,8 @@
         '<div class="eg-form-row"><label>WhatsApp number</label><input class="eg-input" id="egDetailWhatsappNumber" value="' + esc(t.whatsapp_number || "") + '" placeholder="+15551234567" /></div>' +
         '<div class="eg-form-row"><label><input type="checkbox" id="egDetailVoiceEnabled"' + (t.voice_enabled ? ' checked' : '') + ' style="margin-right:6px" />Voice AI enabled</label></div>' +
         '<div class="eg-form-row"><label>Voice number</label><input class="eg-input" id="egDetailVoiceNumber" value="' + esc(t.voice_number || "") + '" placeholder="+15551234567" /></div>' +
+        '<div class="eg-form-row"><label>Test phone numbers <span class="eg-small eg-muted">(comma separated)</span></label><input class="eg-input" id="egDetailTestPhoneNumbers" value="' + esc(t.test_phone_numbers || "") + '" placeholder="+15551234567, +15559876543" /></div>' +
+        '<div class="eg-small eg-muted" style="margin-top:-8px;margin-bottom:14px">Voice/WhatsApp conversations from these numbers are tagged as test so they don\'t mix in with real customer leads.</div>' +
         '<button class="eg-btn" id="egSaveChannels">Save channel settings</button>'
         : '<div class="eg-small eg-muted">WhatsApp and Voice AI are not part of this release.</div>') +
       '<h3 style="margin-top:18px">Contact</h3>' +
@@ -1845,11 +1886,13 @@
     if (saveChannelsBtn) saveChannelsBtn.addEventListener("click", function(){
       var whatsappNumber = document.getElementById("egDetailWhatsappNumber").value.trim();
       var voiceNumber = document.getElementById("egDetailVoiceNumber").value.trim();
+      var testPhoneNumbers = document.getElementById("egDetailTestPhoneNumbers").value.trim();
       var body = {
         whatsapp_enabled: document.getElementById("egDetailWhatsappEnabled").checked,
         whatsapp_number: whatsappNumber || null,
         voice_enabled: document.getElementById("egDetailVoiceEnabled").checked,
-        voice_number: voiceNumber || null
+        voice_number: voiceNumber || null,
+        test_phone_numbers: testPhoneNumbers || null
       };
       saveChannelsBtn.disabled = true; saveChannelsBtn.textContent = "Saving...";
       api("/api/v1/admin/tenants/" + state.tenantDetailId, { method: "PATCH", body: body })
@@ -1936,8 +1979,11 @@
   function demoAsk(text){
     state.demoChatLog.push({ who: "me", text: text });
     render();
-    api("/api/v1/assistant/chat", { method: "POST", body: { message: text } })
+    var demoBody = { message: text };
+    if (state.demoChatConversationId) demoBody.conversation_id = state.demoChatConversationId;
+    api("/api/v1/assistant/chat", { method: "POST", body: demoBody })
       .then(function(data){
+        state.demoChatConversationId = data.conversation_id;
         state.demoChatLog.push({ who: "bot", text: data.answer });
         render();
         var box = document.getElementById("egDemoMessages");
