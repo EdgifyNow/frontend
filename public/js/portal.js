@@ -337,12 +337,14 @@
     }
   }
 
-  function ensureLeads(cb){
-    if (state.leads) { cb(); return; }
+  // Always refetches (no "if already loaded, skip" guard) - leads/contacts
+  // are cheap GETs and the list needs to reflect anything created since the
+  // last visit (a new lead from the widget, a client added from another
+  // tab, etc.) rather than showing whatever was cached at login.
+  function ensureLeads(){
     api("/api/v1/crm/leads").then(function(d){ state.leads = d; render(); }).catch(function(err){ showToast(err.message, true); });
   }
-  function ensureContacts(cb){
-    if (state.contacts) { cb(); return; }
+  function ensureContacts(){
     api("/api/v1/crm/contacts").then(function(d){ state.contacts = d; render(); }).catch(function(err){ showToast(err.message, true); });
   }
   function ensureDocuments(){
@@ -398,7 +400,11 @@
 
   function setView(v){
     state.view = v;
-    if (v === "leads") { ensureLeads(function(){}); ensureContacts(function(){}); }
+    // Refetch fresh data every time a nav item is clicked, rather than only
+    // once per session - otherwise a lead/client/document added elsewhere
+    // (or by someone else) stays invisible until a hard page reload.
+    if (v === "dashboard") loadDashboardData();
+    if (v === "leads") { ensureLeads(); ensureContacts(); }
     if (v === "knowledge") ensureDocuments();
     if (v === "assistant") ensureAssistants();
     if (v === "tenants") ensureTenants();
@@ -999,7 +1005,7 @@
     document.querySelectorAll("[data-tab]").forEach(function(el){
       el.addEventListener("click", function(){
         state.tab = el.getAttribute("data-tab");
-        if (state.tab === "contacts") ensureContacts(function(){});
+        if (state.tab === "contacts") ensureContacts();
         render();
       });
     });
@@ -2071,6 +2077,11 @@
       (state.widgetKey && state.widgetKey.is_active ? '<p class="eg-small eg-muted" style="margin-top:-8px">Creating a new one revokes the current widget immediately - update the code on your website after.</p>' : "") +
       '<div class="eg-form-row"><label>Widget ID</label><input class="eg-input" id="egWidgetIdInput" placeholder="e.g. bright-path-tutoring" value="' + esc(state.widgetIdDraft) + '" /></div>' +
       '<button class="eg-btn" id="egCreateWidgetKey">Generate widget key</button>' +
+      '</div>' +
+      '<div class="eg-card" style="margin-top:16px">' +
+      '<h3>Google Calendar</h3>' +
+      '<p class="eg-small eg-muted" style="margin-top:-8px">Connect your Google Calendar so appointments booked through your AI assistant are added automatically. Opens Google\'s consent screen in a new tab - grant access there, then close that tab and come back here.</p>' +
+      '<button class="eg-btn" id="egConnectGoogleCalendar">Connect Google Calendar</button>' +
       '</div>';
   }
 
@@ -2106,6 +2117,18 @@
           ensureWidgetKey();
         })
         .catch(function(err){ showToast(err.message, true); revokeBtn.disabled = false; revokeBtn.textContent = "Revoke"; });
+    });
+
+    // Backend currently only exposes the authorize-URL step (no status or
+    // disconnect endpoint yet), so this button can't show a "Connected"
+    // state - it just opens Google's consent screen each time it's clicked.
+    var gcalBtn = document.getElementById("egConnectGoogleCalendar");
+    if (gcalBtn) gcalBtn.addEventListener("click", function(){
+      gcalBtn.disabled = true; gcalBtn.textContent = "Opening Google...";
+      api("/api/v1/integrations/google-calendar/authorize")
+        .then(function(d){ window.open(d.authorize_url, "_blank", "noopener"); })
+        .catch(function(err){ showToast(err.message, true); })
+        .then(function(){ gcalBtn.disabled = false; gcalBtn.textContent = "Connect Google Calendar"; });
     });
   }
 
