@@ -1300,6 +1300,14 @@
   }
 
   // ---- Lead detail drawer ----
+  // Editable fields here are exactly what PATCH /api/v1/crm/leads/{id}
+  // accepts (confirmed against the current openapi.json): status, priority,
+  // notes, lost_reason. Everything under "Contact" (name, email, phone,
+  // company, job title) and "Interest" is read-only because there is no
+  // field for any of it in that request schema, and contacts have no PATCH
+  // endpoint at all (GET only) - so a mis-typed name/email/phone can't be
+  // corrected from here yet. That's a backend gap, not a missing binding.
+  //
   // There's no DELETE for leads (GET/PATCH only) - "Lost" + a reason is
   // the only way to get bad/test/duplicate leads out of the way without
   // deleting them. Note lost_reason is write-only: PATCH accepts it but
@@ -1315,6 +1323,10 @@
     var statusSelect = '<select class="eg-select" id="egDrawerStatus">' + statusOptions.map(function(s){
       return '<option value="' + s + '"' + (s === r.status ? " selected" : "") + '>' + s.charAt(0).toUpperCase() + s.slice(1) + '</option>';
     }).join("") + '</select>';
+    var priorityOptions = ["low", "medium", "high"];
+    var prioritySelect = '<select class="eg-select" id="egDrawerPriority">' + priorityOptions.map(function(p){
+      return '<option value="' + p + '"' + (p === r.priority ? " selected" : "") + '>' + capitalize(p) + '</option>';
+    }).join("") + '</select>';
 
     return '<div class="eg-drawer-backdrop open" id="egDrawerBackdrop"></div>' +
       '<aside class="eg-drawer open">' +
@@ -1326,21 +1338,21 @@
       '<div class="eg-kv"><span>Phone</span><b>' + esc(c.phone || "-") + '</b></div>' +
       '<div class="eg-kv"><span>Company</span><b>' + esc(c.company || "-") + '</b></div>' +
       '<div class="eg-kv"><span>Job title</span><b>' + esc(c.job_title || "-") + '</b></div>' +
+      '<div class="eg-small eg-muted" style="margin-top:4px">Contact and Interest aren\'t editable yet - the backend doesn\'t support updating them here. Let support know if any of these need correcting.</div>' +
       '<h4>Lead</h4>' +
       '<div class="eg-kv"><span>Interest</span><b>' + esc(r.service_interest || "-") + '</b></div>' +
       '<div class="eg-kv"><span>Source</span><b>' + esc(sourceLabel(r.source)) + '</b></div>' +
-      '<div class="eg-kv"><span>Priority</span><b>' + esc(capitalize(r.priority)) + '</b></div>' +
       '<div class="eg-kv"><span>Created</span><b>' + fmtDate(r.created_at) + '</b></div>' +
       '<div class="eg-kv"><span>Last Activity</span><b>' + fmtDate(r.last_activity_at) + '</b></div>' +
-      '<h4>Status</h4>' +
-      '<div class="eg-form-row">' + statusSelect + '</div>' +
+      '<h4>Status &amp; Priority</h4>' +
+      '<div class="eg-form-row"><label>Status</label>' + statusSelect + '</div>' +
       '<div class="eg-form-row" id="egDrawerLostReasonRow"' + (r.status === "lost" ? "" : " hidden") + '>' +
       '<label>Reason <span class="eg-small eg-muted">(use "Lost" + a reason like "Test/dummy data" to get bad leads out of the way without deleting - there\'s no delete endpoint for leads)</span></label>' +
       '<input class="eg-input" id="egDrawerLostReason" placeholder="Not interested, duplicate, test data, etc." />' +
       '</div>' +
-      '<button class="eg-btn" id="egDrawerSaveStatus">Save status</button>' +
-      '<h4>Notes</h4>' +
-      '<div style="line-height:1.55">' + (r.notes ? esc(r.notes) : '<span class="eg-muted">-</span>') + '</div>' +
+      '<div class="eg-form-row"><label>Priority</label>' + prioritySelect + '</div>' +
+      '<div class="eg-form-row"><label>Notes</label><textarea class="eg-textarea" id="egDrawerNotes" style="min-height:80px">' + esc(r.notes || "") + '</textarea></div>' +
+      '<button class="eg-btn" id="egDrawerSaveStatus">Save changes</button>' +
       '<h4>Appointments</h4>' +
       appointmentsHtml() +
       '</aside>';
@@ -1383,7 +1395,12 @@
     if (saveBtn) saveBtn.addEventListener("click", function(){
       var id = state.leadDrawerId;
       var newStatus = document.getElementById("egDrawerStatus").value;
-      var body = { status: newStatus };
+      var notesInput = document.getElementById("egDrawerNotes");
+      var body = {
+        status: newStatus,
+        priority: document.getElementById("egDrawerPriority").value,
+        notes: notesInput ? (notesInput.value.trim() || null) : null
+      };
       if (newStatus === "lost") {
         var reasonInput = document.getElementById("egDrawerLostReason");
         body.lost_reason = reasonInput ? (reasonInput.value.trim() || null) : null;
@@ -1395,7 +1412,7 @@
           showToast("Lead updated");
           render();
         })
-        .catch(function(err){ showToast(err.message, true); saveBtn.disabled = false; saveBtn.textContent = "Save status"; });
+        .catch(function(err){ showToast(err.message, true); saveBtn.disabled = false; saveBtn.textContent = "Save changes"; });
     });
     document.querySelectorAll("[data-appt-status]").forEach(function(sel){
       sel.addEventListener("change", function(){
