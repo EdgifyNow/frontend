@@ -1622,6 +1622,7 @@
         render();
         var chatBody = { message: msg };
         if (state.chatConversationId) chatBody.conversation_id = state.chatConversationId;
+        if (state.selectedAssistantId) chatBody.assistant_id = state.selectedAssistantId;
         api("/api/v1/assistant/chat", { method: "POST", body: chatBody })
           .then(function(data){
             state.chatConversationId = data.conversation_id;
