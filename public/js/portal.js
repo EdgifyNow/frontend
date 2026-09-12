@@ -1820,6 +1820,7 @@
       (featureVoiceWhatsapp() ?
         '<div class="eg-form-row"><label><input type="checkbox" id="egDetailWhatsappEnabled"' + (t.whatsapp_enabled ? ' checked' : '') + ' style="margin-right:6px" />WhatsApp enabled</label></div>' +
         '<div class="eg-form-row"><label>WhatsApp number</label><input class="eg-input" id="egDetailWhatsappNumber" value="' + esc(t.whatsapp_number || "") + '" placeholder="+15551234567" /></div>' +
+        '<div class="eg-form-row"><label>WhatsApp welcome message</label><textarea class="eg-textarea" id="egDetailWhatsappWelcome" placeholder="Sent once, on the first message in a new WhatsApp conversation - leave blank to skip straight to the assistant.">' + esc(t.whatsapp_welcome_message || "") + '</textarea></div>' +
         '<div class="eg-form-row"><label><input type="checkbox" id="egDetailVoiceEnabled"' + (t.voice_enabled ? ' checked' : '') + ' style="margin-right:6px" />Voice AI enabled</label></div>' +
         '<div class="eg-form-row"><label>Voice number</label><input class="eg-input" id="egDetailVoiceNumber" value="' + esc(t.voice_number || "") + '" placeholder="+15551234567" /></div>' +
         '<div class="eg-form-row"><label>Test phone numbers <span class="eg-small eg-muted">(comma separated)</span></label><input class="eg-input" id="egDetailTestPhoneNumbers" value="' + esc(t.test_phone_numbers || "") + '" placeholder="+15551234567, +15559876543" /></div>' +
@@ -1927,11 +1928,13 @@
     var saveChannelsBtn = document.getElementById("egSaveChannels");
     if (saveChannelsBtn) saveChannelsBtn.addEventListener("click", function(){
       var whatsappNumber = document.getElementById("egDetailWhatsappNumber").value.trim();
+      var whatsappWelcome = document.getElementById("egDetailWhatsappWelcome").value.trim();
       var voiceNumber = document.getElementById("egDetailVoiceNumber").value.trim();
       var testPhoneNumbers = document.getElementById("egDetailTestPhoneNumbers").value.trim();
       var body = {
         whatsapp_enabled: document.getElementById("egDetailWhatsappEnabled").checked,
         whatsapp_number: whatsappNumber || null,
+        whatsapp_welcome_message: whatsappWelcome || null,
         voice_enabled: document.getElementById("egDetailVoiceEnabled").checked,
         voice_number: voiceNumber || null,
         test_phone_numbers: testPhoneNumbers || null
