@@ -134,7 +134,7 @@
     return name || "Unknown contact";
   }
   function sourceLabel(s){
-    var map = { website_form: "Website form", website_chat: "Website chat", whatsapp: "WhatsApp", voice: "Voice", manual: "Manual" };
+    var map = { website_form: "Website Form", website_chat: "Website chat", whatsapp: "WhatsApp", voice: "Voice", manual: "Manual" };
     return map[s] || s;
   }
   function contactMapFromState(){
@@ -202,7 +202,7 @@
   function pagerHtml(idPrefix, pageInfo, noun){
     if (!pageInfo.total) return "";
     return '<div class="eg-row" style="margin-top:12px">' +
-      '<div class="eg-small eg-muted">Showing ' + pageInfo.pageItems.length + ' of ' + pageInfo.total + ' ' + esc(noun) + '</div>' +
+      '<div class="eg-small eg-muted">Showing ' + pageInfo.pageItems.length + ' of ' + pageInfo.total + ' ' + esc(capitalize(noun)) + '</div>' +
       '<div style="display:flex;gap:6px;align-items:center">' +
       '<button class="eg-btn ghost" style="padding:6px 10px" id="' + idPrefix + 'Prev"' + (pageInfo.page <= 1 ? " disabled" : "") + '>&lsaquo;</button>' +
       '<span class="eg-pill">' + pageInfo.page + ' / ' + pageInfo.totalPages + '</span>' +
@@ -220,6 +220,13 @@
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-+|-+$/g, "")
       .substring(0, 60);
+  }
+  // Display-only capitalization for raw API enum values (lead status,
+  // priority) - the lowercase value itself is still what's sent back to
+  // the API and used for filtering/matching, this only affects what's shown.
+  function capitalize(s){
+    s = String(s || "");
+    return s.charAt(0).toUpperCase() + s.slice(1);
   }
   function genPassword(){
     var chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
@@ -350,46 +357,61 @@
 
   function isAdmin(){ return state.user ? state.user.role === "platform_admin" : false; }
 
+  // Only assigns + re-renders if the freshly-fetched data actually differs
+  // from what's on screen. Refetching on every nav visit (below) means a
+  // background render can land while the user is mid-click on that same
+  // view (e.g. a pagination button) - if the list hadn't actually changed,
+  // that render was pure churn, and on a fast render-on-every-click SPA like
+  // this one it's what was swapping the DOM out from under a click and
+  // landing it on the wrong row instead of the "Next" button. Skipping the
+  // render when nothing changed removes that window in the common case.
+  function setIfChanged(key, data){
+    if (JSON.stringify(state[key]) === JSON.stringify(data)) return false;
+    state[key] = data;
+    return true;
+  }
+
   function loadDashboardData(){
     if (isAdmin()) {
-      api("/api/v1/admin/tenants").then(function(d){ state.tenants = d; render(); }).catch(function(){});
+      api("/api/v1/admin/tenants").then(function(d){ if (setIfChanged("tenants", d)) render(); }).catch(function(){});
     } else {
-      api("/api/v1/crm/leads").then(function(d){ state.leads = d; render(); }).catch(function(){});
-      api("/api/v1/crm/contacts").then(function(d){ state.contacts = d; render(); }).catch(function(){});
-      api("/api/v1/documents").then(function(d){ state.documents = d; render(); }).catch(function(){});
-      api("/api/v1/assistants").then(function(d){ state.assistants = d; render(); }).catch(function(){});
+      api("/api/v1/crm/leads").then(function(d){ if (setIfChanged("leads", d)) render(); }).catch(function(){});
+      api("/api/v1/crm/contacts").then(function(d){ if (setIfChanged("contacts", d)) render(); }).catch(function(){});
+      api("/api/v1/documents").then(function(d){ if (setIfChanged("documents", d)) render(); }).catch(function(){});
+      api("/api/v1/assistants").then(function(d){ if (setIfChanged("assistants", d)) render(); }).catch(function(){});
       // Gates the Voice Activity nav item: only shown once this tenant's
       // voice channel is actually enabled (set from the admin side), see
       // GET /tenants/me.
-      api("/api/v1/tenants/me").then(function(d){ state.tenantSelf = d; render(); }).catch(function(){});
+      api("/api/v1/tenants/me").then(function(d){ if (setIfChanged("tenantSelf", d)) render(); }).catch(function(){});
     }
   }
 
   // Always refetches (no "if already loaded, skip" guard) - leads/contacts
   // are cheap GETs and the list needs to reflect anything created since the
   // last visit (a new lead from the widget, a client added from another
-  // tab, etc.) rather than showing whatever was cached at login.
+  // tab, etc.) rather than showing whatever was cached at login. See
+  // setIfChanged() above for why the render itself is still conditional.
   function ensureLeads(){
-    api("/api/v1/crm/leads").then(function(d){ state.leads = d; render(); }).catch(function(err){ showToast(err.message, true); });
+    api("/api/v1/crm/leads").then(function(d){ if (setIfChanged("leads", d)) render(); }).catch(function(err){ showToast(err.message, true); });
   }
   function ensureContacts(){
-    api("/api/v1/crm/contacts").then(function(d){ state.contacts = d; render(); }).catch(function(err){ showToast(err.message, true); });
+    api("/api/v1/crm/contacts").then(function(d){ if (setIfChanged("contacts", d)) render(); }).catch(function(err){ showToast(err.message, true); });
   }
   function ensureDocuments(){
-    api("/api/v1/documents").then(function(d){ state.documents = d; render(); }).catch(function(err){ showToast(err.message, true); });
+    api("/api/v1/documents").then(function(d){ if (setIfChanged("documents", d)) render(); }).catch(function(err){ showToast(err.message, true); });
   }
   function ensureWidgetKey(){
     api("/api/v1/integrations/widget-key").then(function(d){ state.widgetKey = d; render(); }).catch(function(err){ showToast(err.message, true); });
   }
   function ensureAssistants(){
     api("/api/v1/assistants").then(function(d){
-      state.assistants = d;
-      if (!state.selectedAssistantId) { if (d) { if (d.length) { state.selectedAssistantId = d[0].id; } } }
-      render();
+      var changed = setIfChanged("assistants", d);
+      if (!state.selectedAssistantId) { if (d) { if (d.length) { state.selectedAssistantId = d[0].id; changed = true; } } }
+      if (changed) render();
     }).catch(function(err){ showToast(err.message, true); });
   }
   function ensureTenants(){
-    api("/api/v1/admin/tenants").then(function(d){ state.tenants = d; render(); }).catch(function(err){ showToast(err.message, true); });
+    api("/api/v1/admin/tenants").then(function(d){ if (setIfChanged("tenants", d)) render(); }).catch(function(err){ showToast(err.message, true); });
   }
 
   function openTenantDetail(id){
@@ -494,12 +516,14 @@
     // Instant Demo lives in the client portal: it uploads a doc and asks the
     // live assistant, both scoped to a tenant via the caller's JWT - an admin
     // has no tenant context, so it only works for a client account.
+    // Hidden from nav for now (not deleted) - not fully meaningful yet from
+    // the backend. Re-add the { id: "demo", ... } entry below once that's
+    // ready; the view/route itself still works if linked to directly.
     var items = [
       { id: "dashboard", label: "Dashboard", icon: "home" },
       { id: "leads", label: "Leads & Contacts", icon: "contacts" },
       { id: "knowledge", label: "Knowledge", icon: "book" },
       { id: "assistant", label: "AI Assistant", icon: "spark" },
-      { id: "demo", label: "Instant Demo", icon: "play" },
       { id: "integrations", label: "Integrations", icon: "plug" }
     ];
     // Voice Activity is a real-time operational dashboard, only meaningful
@@ -544,7 +568,7 @@
       '<div class="eg-brand">EdgifyNow <span>' + (isAdmin() ? "Admin" : "Client") + '</span></div>' +
       '<div class="eg-navgroup">' + (isAdmin() ? "Platform" : "Workspace") + '</div>' +
       navHtml +
-      '<div class="eg-navitem logout" data-nav="logout">' + egIcon("logout") + '<span>Log out</span></div>' +
+      '<div class="eg-navitem logout" data-nav="logout">' + egIcon("logout") + '<span>Log Out</span></div>' +
       sidebarFoot +
       '</aside>' +
       '<main class="eg-main">' +
@@ -583,8 +607,8 @@
     return "";
   }
   function viewSub(){
-    if (state.view === "dashboard") return isAdmin() ? "Monitor clients from one place." : "Your AI assistant, CRM and channels in one workspace.";
-    if (state.view === "leads") return "Contacts and leads captured from your website and channels.";
+    if (state.view === "dashboard") return isAdmin() ? "Monitor clients, usage, and platform activity from one place." : "Your AI assistant, CRM and channels in one workspace.";
+    if (state.view === "leads") return "Manage leads and contacts captured from your website and channels.";
     if (state.view === "knowledge") return "Documents powering your AI assistant's answers.";
     if (state.view === "assistant") return "Configure and test your AI assistant.";
     if (state.view === "tenants") return "Manage EdgifyNow client workspaces.";
@@ -733,13 +757,13 @@
       metricCard({ label: "Won", value: wonCount, color: "purple", icon: "trophy", trend: trendLine(wonCount, null) }) +
       '</div>' +
       '<div class="eg-grid2">' +
-      '<div class="eg-card">' + cardHead("flag", "New leads today", "View all leads", "leads") +
-      '<p class="eg-small eg-muted" style="margin:2px 0 12px">Created today, newest first.</p>' +
-      (todayHtml ? '<table class="eg-table"><thead><tr><th>Lead</th><th>Interest</th><th>Source</th><th>Time</th><th>Status</th></tr></thead><tbody>' + todayHtml + '</tbody></table>' : '<div class="eg-empty">No leads today.</div>') +
+      '<div class="eg-card">' + cardHead("flag", "New Leads Today", "View All Leads", "leads") +
+      '<p class="eg-small eg-muted" style="margin:2px 0 12px">Leads created today, newest first.</p>' +
+      (todayHtml ? '<table class="eg-table"><thead><tr><th>Lead</th><th>Interest</th><th>Source</th><th>Time</th><th>Status</th></tr></thead><tbody>' + todayHtml + '</tbody></table>' : '<div class="eg-empty">No New Leads Today</div>') +
       '</div>' +
-      '<div class="eg-card">' + cardHead("clock", "This week's attention", "View all activity", "leads") +
+      '<div class="eg-card">' + cardHead("clock", "This Week's Attention", "View All Activity", "leads") +
       '<p class="eg-small eg-muted" style="margin:2px 0 12px">Open leads with activity this week, newest activity first.</p>' +
-      (weekHtml ? '<table class="eg-table"><thead><tr><th>Lead</th><th>Interest</th><th>Source</th><th>Status</th><th>Last activity</th></tr></thead><tbody>' + weekHtml + '</tbody></table>' : '<div class="eg-empty">Nothing needs attention this week.</div>') +
+      (weekHtml ? '<table class="eg-table"><thead><tr><th>Lead</th><th>Interest</th><th>Source</th><th>Status</th><th>Last Activity</th></tr></thead><tbody>' + weekHtml + '</tbody></table>' : '<div class="eg-empty">Nothing needs attention this week.</div>') +
       '</div>' +
       '</div>';
   }
@@ -821,7 +845,7 @@
     }).join("");
 
     var pagerHtml = '<div class="eg-row" style="margin-top:12px">' +
-      '<div class="eg-small eg-muted">Showing ' + pageTenants.length + ' of ' + filtered.length + ' clients</div>' +
+      '<div class="eg-small eg-muted">Showing ' + pageTenants.length + ' of ' + filtered.length + ' Clients</div>' +
       '<div style="display:flex;gap:6px;align-items:center">' +
       '<button class="eg-btn ghost" style="padding:6px 10px" id="egOverviewPrev"' + (state.overviewPage <= 1 ? " disabled" : "") + '>&lsaquo;</button>' +
       '<span class="eg-pill">' + state.overviewPage + '</span>' +
@@ -836,19 +860,19 @@
       '</select></div>' +
       '<div class="eg-grid4" style="grid-template-columns:repeat(5,1fr)">' +
       metricCard({ label: "Total Clients", value: allTenants.length, color: "blue", icon: "users", sub: "All registered clients" }) +
-      metricCard({ label: "Active Clients", value: activeCount, color: "green", icon: "pulse", sub: "Status is active (excludes trials)" }) +
-      metricCard({ label: "Monthly Recurring Revenue", value: "$" + mrr.toLocaleString(), color: "teal", icon: "dollar", sub: "Sum of monthly package fees" }) +
+      metricCard({ label: "Active Clients", value: activeCount, color: "green", icon: "pulse", sub: "Active clients, excluding trials" }) +
+      metricCard({ label: "Monthly Recurring Revenue", value: "$" + mrr.toLocaleString(), color: "teal", icon: "dollar", sub: "Total recurring monthly package fees" }) +
       metricCard({ label: "Trial Clients", value: trialCount, color: "amber", icon: "flask", sub: "In trial status" }) +
       metricCard({ label: "AI Usage This Period", value: aiUsageTotal.toLocaleString(), color: "purple", icon: "spark", sub: "Total AI interactions" }) +
       '</div>' +
-      '<div class="eg-card"><div class="eg-row"><div>' + cardHead("pulse", "Client health") +
+      '<div class="eg-card"><div class="eg-row"><div>' + cardHead("pulse", "Client Health") +
       '<div class="eg-small eg-muted" style="margin-top:2px">Overview of all clients and their current status, package and usage.</div></div>' +
-      '<div style="display:flex;gap:10px"><input class="eg-input" id="egOverviewSearch" placeholder="Search clients..." value="' + esc(state.overviewSearch) + '" style="width:220px" /><button class="eg-btn" data-goto="tenants">Manage clients</button></div></div>' +
+      '<div style="display:flex;gap:10px"><input class="eg-input" id="egOverviewSearch" placeholder="Search clients..." value="' + esc(state.overviewSearch) + '" style="width:220px" /><button class="eg-btn" data-goto="tenants">Manage Clients</button></div></div>' +
       (rows ? '<table class="eg-table"><thead><tr><th>Client</th><th>Status</th><th>Package</th><th>Usage</th><th>Allowance</th><th>Created</th><th>Last Updated</th><th>Actions</th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div class="eg-empty">' + (state.overviewSearch ? "No matching clients." : "No clients yet.") + '</div>') +
       (filtered.length ? pagerHtml : "") +
       '</div>' +
       '<div class="eg-card" style="margin-top:14px;background:#eef4fb;border-color:#d7e6fb"><div class="eg-row">' +
-      '<div class="eg-small" style="color:#2c5aa8">&#9432; Metrics are calculated from live data via existing APIs. No backend changes required.</div>' +
+      '<div class="eg-small" style="color:#2c5aa8">&#9432; Metrics reflect current platform live data.</div>' +
       '<div class="eg-small" style="color:#2c5aa8">&#128197; Tip: Use the date filter to view metrics for different periods.</div>' +
       '</div></div>';
   }
@@ -915,7 +939,7 @@
     if (s === "won" || s === "qualified" || s === "booked") cls += " green";
     else if (s === "new" || s === "contacted") cls += " amber";
     else if (s === "lost") cls += " red";
-    return '<span class="' + cls + '">' + esc(s) + '</span>';
+    return '<span class="' + cls + '">' + esc(capitalize(s)) + '</span>';
   }
 
   // ---- Leads & Contacts ----
@@ -984,21 +1008,21 @@
         '<td>' + esc(r.service_interest || r.title || "-") + '</td>' +
         '<td><span class="eg-tag">' + esc(sourceLabel(r.source)) + '</span></td>' +
         '<td>' + statusPill(r.status) + '</td>' +
-        '<td>' + esc(r.priority) + '</td>' +
+        '<td>' + esc(capitalize(r.priority)) + '</td>' +
         '<td class="eg-small eg-muted">' + fmtDate(r.last_activity_at) + '</td>' +
         '<td class="eg-small eg-muted">' + fmtDate(r.created_at) + '</td></tr>';
     }).join("");
     return '<div class="eg-card">' +
       '<div class="eg-toolbar">' +
-      '<input id="egLeadSearch" placeholder="Search lead or contact..." value="' + esc(state.leadSearch) + '" />' +
-      '<select id="egLeadDateFilter">' + selOpts([{value:"month",label:"This month"},{value:"quarter",label:"This quarter"},{value:"year",label:"This year"},{value:"all",label:"All time"}], state.leadDateFilter) + '</select>' +
-      '<select id="egLeadStatusFilter">' + selOpts(["all","new","contacted","qualified","booked","won","lost"].map(function(s){ return {value:s, label: s === "all" ? "All status" : s}; }), state.leadStatusFilter) + '</select>' +
-      '<select id="egLeadSourceFilter">' + selOpts([{value:"all",label:"All sources"},{value:"website_form",label:"Website form"},{value:"website_chat",label:"Website chat"},{value:"whatsapp",label:"WhatsApp"},{value:"voice",label:"Voice"},{value:"manual",label:"Manual"}], state.leadSourceFilter) + '</select>' +
+      '<input id="egLeadSearch" placeholder="Search leads or contacts..." value="' + esc(state.leadSearch) + '" />' +
+      '<select id="egLeadDateFilter">' + selOpts([{value:"month",label:"This month"},{value:"quarter",label:"This Quarter"},{value:"year",label:"This year"},{value:"all",label:"All Time"}], state.leadDateFilter) + '</select>' +
+      '<select id="egLeadStatusFilter">' + selOpts(["all","new","contacted","qualified","booked","won","lost"].map(function(s){ return {value:s, label: s === "all" ? "All Statuses" : capitalize(s)}; }), state.leadStatusFilter) + '</select>' +
+      '<select id="egLeadSourceFilter">' + selOpts([{value:"all",label:"All Sources"},{value:"website_form",label:"Website Form"},{value:"website_chat",label:"Website chat"},{value:"whatsapp",label:"WhatsApp"},{value:"voice",label:"Voice"},{value:"manual",label:"Manual"}], state.leadSourceFilter) + '</select>' +
       '<button class="eg-btn" id="egDownloadLeadsCsv">Download Leads CSV</button>' +
       '</div>' +
       (lrows ? '<table class="eg-table"><thead><tr><th>Lead</th><th>Interest</th><th>Source</th><th>Status</th><th>Priority</th><th>Last Activity</th><th>Created</th></tr></thead><tbody>' + lrows + '</tbody></table>' : '<div class="eg-empty">' + (state.leadSearch ? "No matching leads." : "No leads in this period.") + '</div>') +
       pagerHtml("egLead", page, "leads") +
-      (state.leadDateFilter !== "all" ? '<div class="eg-small eg-muted" style="margin-top:10px">Only showing leads from the selected period. Older leads aren\'t deleted - switch to "All time" or use Download Leads CSV to get full history.</div>' : "") +
+      (state.leadDateFilter !== "all" ? '<div class="eg-small eg-muted" style="margin-top:10px">Only showing leads from the selected period. Older leads aren\'t deleted - switch to "All Time" or use Download Leads CSV to get full history.</div>' : "") +
       '</div>';
   }
 
@@ -1012,12 +1036,12 @@
     return '<div class="eg-card">' +
       '<div class="eg-toolbar">' +
       '<input id="egContactSearch" placeholder="Search name, email, company..." value="' + esc(state.contactSearch) + '" />' +
-      '<select id="egContactDateFilter">' + selOpts([{value:"month",label:"This month"},{value:"quarter",label:"This quarter"},{value:"year",label:"This year"},{value:"all",label:"All time"}], state.contactDateFilter) + '</select>' +
+      '<select id="egContactDateFilter">' + selOpts([{value:"month",label:"This month"},{value:"quarter",label:"This Quarter"},{value:"year",label:"This year"},{value:"all",label:"All Time"}], state.contactDateFilter) + '</select>' +
       '<button class="eg-btn" id="egDownloadContactsCsv">Download Contacts CSV</button>' +
       '</div>' +
       (crows ? '<table class="eg-table"><thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Company</th><th>Preferred Channel</th><th>Last Interaction</th><th>Created</th></tr></thead><tbody>' + crows + '</tbody></table>' : '<div class="eg-empty">' + (state.contactSearch ? "No matching contacts." : "No contacts in this period.") + '</div>') +
       pagerHtml("egContact", page, "contacts") +
-      (state.contactDateFilter !== "all" ? '<div class="eg-small eg-muted" style="margin-top:10px">Only showing contacts created in the selected period. Older contacts aren\'t deleted - switch to "All time" or use Download Contacts CSV to get full history.</div>' : "") +
+      (state.contactDateFilter !== "all" ? '<div class="eg-small eg-muted" style="margin-top:10px">Only showing contacts created in the selected period. Older contacts aren\'t deleted - switch to "All Time" or use Download Contacts CSV to get full history.</div>' : "") +
       '</div>';
   }
 
@@ -1305,9 +1329,9 @@
       '<h4>Lead</h4>' +
       '<div class="eg-kv"><span>Interest</span><b>' + esc(r.service_interest || "-") + '</b></div>' +
       '<div class="eg-kv"><span>Source</span><b>' + esc(sourceLabel(r.source)) + '</b></div>' +
-      '<div class="eg-kv"><span>Priority</span><b>' + esc(r.priority) + '</b></div>' +
+      '<div class="eg-kv"><span>Priority</span><b>' + esc(capitalize(r.priority)) + '</b></div>' +
       '<div class="eg-kv"><span>Created</span><b>' + fmtDate(r.created_at) + '</b></div>' +
-      '<div class="eg-kv"><span>Last activity</span><b>' + fmtDate(r.last_activity_at) + '</b></div>' +
+      '<div class="eg-kv"><span>Last Activity</span><b>' + fmtDate(r.last_activity_at) + '</b></div>' +
       '<h4>Status</h4>' +
       '<div class="eg-form-row">' + statusSelect + '</div>' +
       '<div class="eg-form-row" id="egDrawerLostReasonRow"' + (r.status === "lost" ? "" : " hidden") + '>' +
@@ -1647,23 +1671,23 @@
       }).join("");
       listHtml = '<table class="eg-table"><thead><tr><th>Name</th><th>Status</th><th>Package</th><th>Usage / Allowance</th><th>Created</th></tr></thead><tbody>' + rows + '</tbody></table>' +
         pagerHtml("egTenants", page, "clients") +
-        '<div class="eg-small eg-muted" style="margin-top:10px">Click a row to view or edit full client details.</div>';
+        '<div class="eg-small eg-muted" style="margin-top:10px">Select a client to view or edit their details.</div>';
     }
 
     return '<div class="eg-grid2">' +
-      '<div class="eg-card"><h3>All clients</h3>' + listHtml + '</div>' +
-      '<div class="eg-card"><h3>Add new client</h3>' +
-      '<div class="eg-form-row"><label>Contact name</label><input class="eg-input" id="egContactName" placeholder="Full name" /></div>' +
-      '<div class="eg-form-row"><label>Contact email</label><input class="eg-input" type="email" id="egOwnerEmail" placeholder="owner@business.com" /></div>' +
-      '<div class="eg-form-row"><label>Contact phone (US)</label><input class="eg-input" id="egContactPhone" placeholder="(555) 123-4567" /></div>' +
-      '<div class="eg-form-row"><label>Business name <span class="eg-small eg-muted">(optional)</span></label><input class="eg-input" id="egTenantName" /></div>' +
-      '<div class="eg-form-row"><label>Website <span class="eg-small eg-muted">(optional)</span></label><input class="eg-input" id="egWebsite" placeholder="https://example.com" /></div>' +
-      '<div class="eg-form-row"><label>Welcome message <span class="eg-small eg-muted">(optional)</span></label><input class="eg-input" id="egWelcomeMsg" /></div>' +
-      '<div class="eg-form-row"><label>Slug <span class="eg-small eg-muted">(auto-filled from the name above, edit if needed)</span></label><input class="eg-input" id="egTenantSlug" placeholder="e.g. bright-path-tutoring" /></div>' +
-      '<div class="eg-form-row"><label>Login password <span class="eg-small eg-muted">(auto-generated - copy this to share with the client)</span></label>' +
+      '<div class="eg-card"><h3>All Clients</h3>' + listHtml + '</div>' +
+      '<div class="eg-card"><h3>Add New Client</h3>' +
+      '<div class="eg-form-row"><label>Contact Name</label><input class="eg-input" id="egContactName" placeholder="Full name" /></div>' +
+      '<div class="eg-form-row"><label>Contact Email</label><input class="eg-input" type="email" id="egOwnerEmail" placeholder="owner@business.com" /></div>' +
+      '<div class="eg-form-row"><label>Contact Phone (US)</label><input class="eg-input" id="egContactPhone" placeholder="(555) 123-4567" /></div>' +
+      '<div class="eg-form-row"><label>Business Name <span class="eg-small eg-muted">(Optional)</span></label><input class="eg-input" id="egTenantName" /></div>' +
+      '<div class="eg-form-row"><label>Website <span class="eg-small eg-muted">(Optional)</span></label><input class="eg-input" id="egWebsite" placeholder="https://example.com" /></div>' +
+      '<div class="eg-form-row"><label>Welcome Message <span class="eg-small eg-muted">(Optional)</span></label><input class="eg-input" id="egWelcomeMsg" /></div>' +
+      '<div class="eg-form-row"><label>Slug <span class="eg-small eg-muted">(Auto-Generated; Edit if Needed)</span></label><input class="eg-input" id="egTenantSlug" placeholder="e.g., bright-path-tutoring" /></div>' +
+      '<div class="eg-form-row"><label>Login Password <span class="eg-small eg-muted">(Auto-Generated &mdash; Copy to Share with Client)</span></label>' +
       '<div style="display:flex;gap:8px"><input class="eg-input" id="egOwnerPassword" value="' + esc(state.pendingClientPassword) + '" />' +
       '<button type="button" class="eg-btn ghost" id="egRegenPassword" style="white-space:nowrap">Regenerate</button></div></div>' +
-      '<button class="eg-btn" id="egCreateTenant" style="width:100%">Create client</button>' +
+      '<button class="eg-btn" id="egCreateTenant" style="width:100%">Create Client</button>' +
       '</div></div>';
   }
 
@@ -1732,7 +1756,7 @@
           ensureTenants();
         })
         .catch(function(err){ showToast(err.message, true); })
-        .then(function(){ btn.disabled = false; btn.textContent = "Create client"; });
+        .then(function(){ btn.disabled = false; btn.textContent = "Create Client"; });
     });
   }
 
@@ -1785,10 +1809,10 @@
         '<button class="eg-btn" id="egSaveChannels">Save channel settings</button>'
         : '<div class="eg-small eg-muted">WhatsApp and Voice AI are not part of this release.</div>') +
       '<h3 style="margin-top:18px">Contact</h3>' +
-      '<div class="eg-form-row"><label>Contact name</label><div class="eg-input" style="background:#f7f9fc">' + (t.contact_name ? esc(t.contact_name) : dash) + '</div></div>' +
-      '<div class="eg-form-row"><label>Contact phone</label><div class="eg-input" style="background:#f7f9fc">' + (t.contact_phone ? esc(t.contact_phone) : dash) + '</div></div>' +
+      '<div class="eg-form-row"><label>Contact Name</label><div class="eg-input" style="background:#f7f9fc">' + (t.contact_name ? esc(t.contact_name) : dash) + '</div></div>' +
+      '<div class="eg-form-row"><label>Contact Phone</label><div class="eg-input" style="background:#f7f9fc">' + (t.contact_phone ? esc(t.contact_phone) : dash) + '</div></div>' +
       '<div class="eg-form-row"><label>Website</label><div class="eg-input" style="background:#f7f9fc">' + (t.website ? ('<a href="' + esc(t.website) + '" target="_blank" rel="noopener">' + esc(t.website) + '</a>') : dash) + '</div></div>' +
-      '<div class="eg-small eg-muted">There is no contact email field on this resource - checked every admin endpoint (GET/PATCH tenant, GET tenants list, GET /api/v1/users). owner_email is only captured at client creation time and never stored back on the tenant record, so it can\'t be shown or edited here. Needs a backend field before this can be added.</div>' +
+      '<div class="eg-small eg-muted">Contact email isn\'t available here yet - it\'s only captured when the client account is first created.</div>' +
       '</div>' +
       '</div>' +
       channelSummaryHtml(t);
@@ -1839,11 +1863,11 @@
     }).join("");
 
     var noteHtml = s
-      ? '<div class="eg-small eg-muted" style="margin-top:10px">Per-channel breakdown from GET /api/v1/admin/tenants/{id}/usage-summary.</div>'
+      ? '<div class="eg-small eg-muted" style="margin-top:10px">AI Usage and lead activity by channel.</div>'
       : '<div class="eg-small eg-muted" style="margin-top:10px">Could not load the per-channel breakdown just now, so those cells show &mdash; rather than a guess. Total AI Interactions / Allowance above is still real (from the tenant record). Try reopening this client.</div>';
 
     return '<div class="eg-card" style="margin-top:16px">' +
-      '<h3>Channel summary</h3>' +
+      '<h3>Channel AI Interactions Summary</h3>' +
       '<table class="eg-table"><thead><tr><th>Channel</th><th>AI Interactions</th><th>Leads Captured</th></tr></thead><tbody>' +
       rowsHtml +
       '<tr><td><b>Total</b></td><td><b>' + totalAiHtml + '</b></td><td><b>' + totalLeadsHtml + '</b></td></tr>' +
