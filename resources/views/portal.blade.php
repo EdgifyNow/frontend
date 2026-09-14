@@ -18,6 +18,7 @@
   --green:#168a5b;
   --amber:#b7791f;
   --red:#c24141;
+  --purple:#7c4fd6;
   --white:#fff;
 }
 *{box-sizing:border-box}
@@ -83,6 +84,17 @@ a{text-decoration:none;color:inherit}
 .eg-vtile.amber{border-left-color:var(--amber)}
 .eg-vtile.blue{border-left-color:var(--blue)}
 .eg-vtile.red{border-left-color:var(--red)}
+.eg-vtile.purple{border-left-color:var(--purple)}
+.eg-pill.purple{background:#f3edfc;color:var(--purple)}
+.eg-pill.navy{background:#eef1f8;color:var(--ink)}
+.eg-vtile-typebadge{display:inline-flex;align-items:center;gap:6px;font-weight:650;font-size:13px;padding:4px 0}
+.eg-vtile-typebadge.red{color:var(--red)}
+.eg-vtile-typebadge.purple{color:var(--purple)}
+.eg-vtile-typebadge.green{color:var(--green)}
+.eg-vtile-typebadge.blue{color:var(--blue)}
+.eg-vtile-headline{font-size:13.5px;font-weight:650;color:var(--ink);margin-top:6px}
+.eg-vtile-desc{font-size:12.5px;color:var(--muted);margin-top:2px;line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.eg-vtile-meta{display:flex;justify-content:space-between;align-items:center;color:var(--muted);font-size:11px;margin-top:10px}
 .eg-vtile-top{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:8px}
 .eg-vtile-name{font-weight:650;font-size:14px}
 .eg-vtile-phone{color:var(--muted);font-size:12px;margin-top:2px}

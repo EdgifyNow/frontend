@@ -74,12 +74,16 @@
     voiceCaptures: null,
     voiceSearch: "",
     voiceStatusFilter: "all",
+    voiceTypeFilter: "all",
+    voiceSinceFilter: "7d",
     voiceHideTest: false,
     voiceDrawerId: null,
     voiceDrawerDetail: null,
     whatsappCaptures: null,
     whatsappSearch: "",
     whatsappStatusFilter: "all",
+    whatsappTypeFilter: "all",
+    whatsappSinceFilter: "7d",
     whatsappHideTest: false,
     whatsappDrawerId: null,
     whatsappDrawerDetail: null
@@ -1114,19 +1118,45 @@
   // distinguished only by which channel they ask the backend for
   // (GET /crm/voice-captures?channel=voice|whatsapp) - the backend keeps
   // both in the same table, split by the conversation's own channel.
-  var CHANNEL_STATUS_COLOR = { new: "gray", in_progress: "green", ready: "amber", completed: "blue", cancelled: "red" };
+  // Status still drives the badge/pill in the corner (the workflow state),
+  // but the tile's left border and type icon are colored by capture_type
+  // instead (order/appointment/lead/general_inquiry) - easier to scan a
+  // grid of tiles by what kind of thing each one is.
+  var CHANNEL_STATUS_BADGE = { new: "navy", in_progress: "blue", ready: "amber", completed: "green", cancelled: "red" };
   var CHANNEL_STATUS_OPTIONS = ["new", "in_progress", "ready", "completed", "cancelled"];
+  var CHANNEL_TYPE_COLOR = { order: "red", appointment: "purple", lead: "green", general_inquiry: "blue" };
+  var CHANNEL_TYPE_ICON = { order: "&#128722;", appointment: "&#128197;", lead: "&#128100;", general_inquiry: "&#128172;" };
+  var CHANNEL_TYPE_OPTIONS = ["order", "appointment", "lead", "general_inquiry"];
   // One-touch tile actions: the single most likely next step for each
   // status, so staff never has to open the drawer just to advance an
   // order/appointment/lead through its workflow. "Done" maps to the same
-  // completed status the drawer's own dropdown already uses.
+  // completed status the drawer's own dropdown already uses. A
+  // general_inquiry never enters this workflow at all (see the
+  // needs_confirmation/general_inquiry backend fix) - it's just something
+  // to see or clear, not a job to run through stages.
   var CHANNEL_NEXT_STATUS = { new: "in_progress", in_progress: "ready", ready: "completed" };
   var CHANNEL_NEXT_LABEL = { new: "Start", in_progress: "Ready", ready: "Done" };
+  var CHANNEL_SINCE_OPTIONS = [
+    { value: "", label: "All time" },
+    { value: "today", label: "Today" },
+    { value: "7d", label: "Last 7 days" },
+    { value: "30d", label: "Last 30 days" }
+  ];
+  function channelSinceIso(value){
+    if (!value) return null;
+    var days = value === "today" ? 0 : (value === "7d" ? 7 : (value === "30d" ? 30 : null));
+    if (days === null) return null;
+    var d = new Date();
+    d.setDate(d.getDate() - days);
+    if (value === "today") d.setHours(0, 0, 0, 0);
+    return d.toISOString();
+  }
 
   var CHANNEL_ACTIVITY = {
     voice: {
       key: "voice",
-      captures: "voiceCaptures", search: "voiceSearch", statusFilter: "voiceStatusFilter", hideTest: "voiceHideTest",
+      captures: "voiceCaptures", search: "voiceSearch", statusFilter: "voiceStatusFilter",
+      typeFilter: "voiceTypeFilter", sinceFilter: "voiceSinceFilter", hideTest: "voiceHideTest",
       drawerId: "voiceDrawerId", drawerDetail: "voiceDrawerDetail",
       idPrefix: "egVoice", contactLabel: "Caller",
       emptyMessage: "No voice activity yet. Once your assistant takes a call, captured orders, appointments, and leads will show up here.",
@@ -1134,7 +1164,8 @@
     },
     whatsapp: {
       key: "whatsapp",
-      captures: "whatsappCaptures", search: "whatsappSearch", statusFilter: "whatsappStatusFilter", hideTest: "whatsappHideTest",
+      captures: "whatsappCaptures", search: "whatsappSearch", statusFilter: "whatsappStatusFilter",
+      typeFilter: "whatsappTypeFilter", sinceFilter: "whatsappSinceFilter", hideTest: "whatsappHideTest",
       drawerId: "whatsappDrawerId", drawerDetail: "whatsappDrawerDetail",
       idPrefix: "egWhatsapp", contactLabel: "Contact",
       emptyMessage: "No WhatsApp activity yet. Once your assistant captures an order, appointment, or lead over WhatsApp, it will show up here.",
@@ -1160,13 +1191,16 @@
     if (!details) return "";
     var bits = Object.keys(details).map(function(k){ return details[k]; }).filter(function(v){ return v !== null && v !== undefined && v !== ""; });
     if (!bits.length) return "";
-    return '<div class="eg-vtile-details">' + bits.map(esc).join(" &bull; ") + '</div>';
+    return '<div class="eg-vtile-headline">' + bits.map(esc).join(" &bull; ") + '</div>';
   }
 
   function loadChannelCaptures(cfg){
     var params = new URLSearchParams();
     params.set("channel", cfg.key);
     if (state[cfg.statusFilter] !== "all") params.set("status_filter", state[cfg.statusFilter]);
+    if (state[cfg.typeFilter] !== "all") params.set("capture_type", state[cfg.typeFilter]);
+    var sinceIso = channelSinceIso(state[cfg.sinceFilter]);
+    if (sinceIso) params.set("since", sinceIso);
     if (state[cfg.search]) params.set("search", state[cfg.search]);
     if (state[cfg.hideTest]) params.set("is_test", "false");
     api("/api/v1/crm/voice-captures?" + params.toString()).then(function(d){
@@ -1187,12 +1221,23 @@
 
   function channelActivityHtml(cfg){
     var statusOptions = ["all"].concat(CHANNEL_STATUS_OPTIONS);
+    var typeOptions = ["all"].concat(CHANNEL_TYPE_OPTIONS);
     var filters =
       '<div class="eg-row" style="margin-bottom:14px;gap:10px;flex-wrap:wrap">' +
       '<input class="eg-input" id="' + cfg.idPrefix + 'Search" placeholder="Search name, phone, or summary..." style="max-width:280px" value="' + esc(state[cfg.search]) + '" />' +
+      '<select class="eg-select" id="' + cfg.idPrefix + 'TypeFilter" style="width:auto">' +
+      typeOptions.map(function(t){
+        return '<option value="' + t + '"' + (t === state[cfg.typeFilter] ? " selected" : "") + '>' + (t === "all" ? "All types" : channelTypeLabel(t)) + '</option>';
+      }).join("") +
+      '</select>' +
       '<select class="eg-select" id="' + cfg.idPrefix + 'StatusFilter" style="width:auto">' +
       statusOptions.map(function(s){
         return '<option value="' + s + '"' + (s === state[cfg.statusFilter] ? " selected" : "") + '>' + (s === "all" ? "All statuses" : channelStatusLabel(s)) + '</option>';
+      }).join("") +
+      '</select>' +
+      '<select class="eg-select" id="' + cfg.idPrefix + 'SinceFilter" style="width:auto">' +
+      CHANNEL_SINCE_OPTIONS.map(function(o){
+        return '<option value="' + o.value + '"' + (o.value === state[cfg.sinceFilter] ? " selected" : "") + '>' + o.label + '</option>';
       }).join("") +
       '</select>' +
       '<label class="eg-small" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="' + cfg.idPrefix + 'HideTest"' + (state[cfg.hideTest] ? ' checked' : '') + ' />Hide my own test messages</label>' +
@@ -1203,32 +1248,52 @@
     if (!captures.length) return filters + '<div class="eg-card"><div class="eg-small eg-muted">' + esc(cfg.emptyMessage) + '</div></div>';
 
     var tiles = captures.map(function(v){
-      var color = CHANNEL_STATUS_COLOR[v.status] || "gray";
+      var typeColor = CHANNEL_TYPE_COLOR[v.capture_type] || "gray";
+      var badgeColor = CHANNEL_STATUS_BADGE[v.status] || "navy";
+      var isInquiry = v.capture_type === "general_inquiry";
       var nextStatus = CHANNEL_NEXT_STATUS[v.status];
+      var isDone = v.status === "completed" || v.status === "cancelled";
+
       var actionsHtml = "";
-      if (nextStatus || v.status === "new" || v.status === "in_progress" || v.status === "ready") {
+      if (isInquiry) {
+        if (!isDone) {
+          actionsHtml = '<div class="eg-vtile-actions">' +
+            '<button class="eg-btn small ghost" data-channel-drawer="' + cfg.key + '" data-channel-drawer-id="' + esc(v.id) + '">View Details</button>' +
+            '<button class="eg-btn small ghost" data-channel-action="' + cfg.key + '" data-channel-action-id="' + esc(v.id) + '" data-channel-action-status="completed">Dismiss</button>' +
+            '</div>';
+        }
+      } else if (!isDone) {
         actionsHtml = '<div class="eg-vtile-actions">' +
           (nextStatus
             ? '<button class="eg-btn small" data-channel-action="' + cfg.key + '" data-channel-action-id="' + esc(v.id) + '" data-channel-action-status="' + nextStatus + '">' + esc(CHANNEL_NEXT_LABEL[v.status]) + '</button>'
             : '') +
+          '<button class="eg-btn small ghost" data-channel-drawer="' + cfg.key + '" data-channel-drawer-id="' + esc(v.id) + '">View</button>' +
           '<button class="eg-btn small ghost" data-channel-action="' + cfg.key + '" data-channel-action-id="' + esc(v.id) + '" data-channel-action-status="cancelled">Cancel</button>' +
           '</div>';
       }
-      return '<div class="eg-vtile ' + color + '" data-channel-drawer="' + cfg.key + '" data-channel-drawer-id="' + esc(v.id) + '">' +
+
+      var headline = channelDetailsLine(v.details);
+      var descHtml = headline
+        ? '<div class="eg-vtile-desc">' + esc(v.summary) + '</div>'
+        : '<div class="eg-vtile-headline">' + esc(v.summary) + '</div>';
+
+      return '<div class="eg-vtile ' + typeColor + '" data-channel-drawer="' + cfg.key + '" data-channel-drawer-id="' + esc(v.id) + '">' +
         '<div class="eg-vtile-top">' +
         '<div><div class="eg-vtile-name">' + esc(v.contact.name || "Unknown") + (v.contact.is_test ? ' <span class="eg-tag" style="background:#f7d774">TEST</span>' : '') + '</div>' +
         '<div class="eg-vtile-phone">' + esc(v.contact.phone || "-") + '</div></div>' +
-        '<span class="eg-pill ' + color + '">' + channelStatusLabel(v.status) + '</span>' +
+        '<span class="eg-pill ' + badgeColor + '">' + channelStatusLabel(v.status) + '</span>' +
         '</div>' +
-        '<span class="eg-tag">' + esc(channelTypeLabel(v.capture_type)) + '</span>' +
-        '<div class="eg-vtile-summary">' + esc(v.summary) + '</div>' +
-        channelDetailsLine(v.details) +
-        '<div class="eg-vtile-time">' + fmtDate(v.created_at) + '</div>' +
+        '<div class="eg-vtile-typebadge ' + typeColor + '">' + CHANNEL_TYPE_ICON[v.capture_type] + ' ' + esc(channelTypeLabel(v.capture_type)) + '</div>' +
+        headline +
+        descHtml +
+        '<div class="eg-vtile-meta"><span>' + fmtDate(v.created_at) + '</span></div>' +
         actionsHtml +
         '</div>';
     }).join("");
 
-    return filters + '<div class="eg-tilegrid">' + tiles + '</div>';
+    return filters + '<div class="eg-tilegrid">' + tiles + '</div>' +
+      '<div class="eg-small eg-muted" style="margin-top:14px">Showing ' + captures.length + ' ' + (captures.length === 1 ? "activity" : "activities") +
+      ' &middot; Each call or message is a separate activity, even from the same phone number</div>';
   }
 
   function bindChannelActivity(cfg){
@@ -1243,13 +1308,26 @@
       state[cfg.statusFilter] = statusFilterEl.value;
       loadChannelCaptures(cfg);
     });
+    var typeFilterEl = document.getElementById(cfg.idPrefix + "TypeFilter");
+    if (typeFilterEl) typeFilterEl.addEventListener("change", function(){
+      state[cfg.typeFilter] = typeFilterEl.value;
+      loadChannelCaptures(cfg);
+    });
+    var sinceFilterEl = document.getElementById(cfg.idPrefix + "SinceFilter");
+    if (sinceFilterEl) sinceFilterEl.addEventListener("change", function(){
+      state[cfg.sinceFilter] = sinceFilterEl.value;
+      loadChannelCaptures(cfg);
+    });
     var hideTestEl = document.getElementById(cfg.idPrefix + "HideTest");
     if (hideTestEl) hideTestEl.addEventListener("change", function(){
       state[cfg.hideTest] = hideTestEl.checked;
       loadChannelCaptures(cfg);
     });
     document.querySelectorAll('[data-channel-drawer="' + cfg.key + '"]').forEach(function(el){
-      el.addEventListener("click", function(){ openChannelDrawer(cfg, el.getAttribute("data-channel-drawer-id")); });
+      el.addEventListener("click", function(e){
+        e.stopPropagation();
+        openChannelDrawer(cfg, el.getAttribute("data-channel-drawer-id"));
+      });
     });
     document.querySelectorAll('[data-channel-action="' + cfg.key + '"]').forEach(function(el){
       el.addEventListener("click", function(e){
