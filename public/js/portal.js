@@ -1116,6 +1116,12 @@
   // both in the same table, split by the conversation's own channel.
   var CHANNEL_STATUS_COLOR = { new: "gray", in_progress: "green", ready: "amber", completed: "blue", cancelled: "red" };
   var CHANNEL_STATUS_OPTIONS = ["new", "in_progress", "ready", "completed", "cancelled"];
+  // One-touch tile actions: the single most likely next step for each
+  // status, so staff never has to open the drawer just to advance an
+  // order/appointment/lead through its workflow. "Done" maps to the same
+  // completed status the drawer's own dropdown already uses.
+  var CHANNEL_NEXT_STATUS = { new: "in_progress", in_progress: "ready", ready: "completed" };
+  var CHANNEL_NEXT_LABEL = { new: "Start", in_progress: "Ready", ready: "Done" };
 
   var CHANNEL_ACTIVITY = {
     voice: {
@@ -1184,6 +1190,16 @@
 
     var tiles = captures.map(function(v){
       var color = CHANNEL_STATUS_COLOR[v.status] || "gray";
+      var nextStatus = CHANNEL_NEXT_STATUS[v.status];
+      var actionsHtml = "";
+      if (nextStatus || v.status === "new" || v.status === "in_progress" || v.status === "ready") {
+        actionsHtml = '<div class="eg-vtile-actions">' +
+          (nextStatus
+            ? '<button class="eg-btn small" data-channel-action="' + cfg.key + '" data-channel-action-id="' + esc(v.id) + '" data-channel-action-status="' + nextStatus + '">' + esc(CHANNEL_NEXT_LABEL[v.status]) + '</button>'
+            : '') +
+          '<button class="eg-btn small ghost" data-channel-action="' + cfg.key + '" data-channel-action-id="' + esc(v.id) + '" data-channel-action-status="cancelled">Cancel</button>' +
+          '</div>';
+      }
       return '<div class="eg-vtile ' + color + '" data-channel-drawer="' + cfg.key + '" data-channel-drawer-id="' + esc(v.id) + '">' +
         '<div class="eg-vtile-top">' +
         '<div><div class="eg-vtile-name">' + esc(v.contact.name || "Unknown") + (v.contact.is_test ? ' <span class="eg-tag" style="background:#f7d774">TEST</span>' : '') + '</div>' +
@@ -1193,6 +1209,7 @@
         '<span class="eg-tag">' + esc(channelTypeLabel(v.capture_type)) + '</span>' +
         '<div class="eg-vtile-summary">' + esc(v.summary) + '</div>' +
         '<div class="eg-vtile-time">' + fmtDate(v.created_at) + '</div>' +
+        actionsHtml +
         '</div>';
     }).join("");
 
@@ -1218,6 +1235,17 @@
     });
     document.querySelectorAll('[data-channel-drawer="' + cfg.key + '"]').forEach(function(el){
       el.addEventListener("click", function(){ openChannelDrawer(cfg, el.getAttribute("data-channel-drawer-id")); });
+    });
+    document.querySelectorAll('[data-channel-action="' + cfg.key + '"]').forEach(function(el){
+      el.addEventListener("click", function(e){
+        e.stopPropagation();
+        var captureId = el.getAttribute("data-channel-action-id");
+        var newStatus = el.getAttribute("data-channel-action-status");
+        el.disabled = true;
+        api("/api/v1/crm/voice-captures/" + captureId, { method: "PATCH", body: { status: newStatus } })
+          .then(function(){ loadChannelCaptures(cfg); })
+          .catch(function(err){ showToast(err.message, true); el.disabled = false; });
+      });
     });
   }
 

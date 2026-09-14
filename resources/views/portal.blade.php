@@ -88,6 +88,9 @@ a{text-decoration:none;color:inherit}
 .eg-vtile-phone{color:var(--muted);font-size:12px;margin-top:2px}
 .eg-vtile-summary{font-size:13px;color:#374151;margin-top:8px;line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .eg-vtile-time{color:var(--muted);font-size:11px;margin-top:10px}
+.eg-vtile-actions{display:flex;gap:8px;margin-top:10px}
+.eg-vtile-actions .eg-btn{flex:1;padding:8px 10px}
+.eg-btn.small{padding:6px 10px;font-size:12px;border-radius:8px}
 .eg-table{width:100%;border-collapse:collapse}
 .eg-table th,.eg-table td{padding:12px 10px;border-bottom:1px solid var(--line);text-align:left;font-size:13px;vertical-align:middle}
 .eg-table th{color:var(--muted);font-weight:650;background:#fbfcfe}
