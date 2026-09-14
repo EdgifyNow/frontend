@@ -71,6 +71,8 @@
     contactSearch: "",
     contactDateFilter: "quarter",
     tenantSelf: null,
+    voiceSettings: null,
+    voiceSettingsOpen: false,
     voiceCaptures: null,
     voiceSearch: "",
     voiceStatusFilter: "active",
@@ -1470,8 +1472,130 @@
     });
   }
 
-  function voiceHtml(){ return channelActivityHtml(CHANNEL_ACTIVITY.voice); }
-  function bindVoice(){ bindChannelActivity(CHANNEL_ACTIVITY.voice); }
+  // ---- Voice AI Call Settings (welcome/handoff/business-hours/emergency
+  // messages) - a collapsed-by-default panel above the live Voice
+  // Activity board, so the operational tile grid stays the first thing
+  // staff see, but the configuration is one click away on the same page
+  // rather than buried somewhere else. Voice-only: none of this applies
+  // to WhatsApp.
+  var VOICE_SETTINGS_DAYS = [
+    ["mon", "Mon"], ["tue", "Tue"], ["wed", "Wed"], ["thu", "Thu"], ["fri", "Fri"], ["sat", "Sat"], ["sun", "Sun"]
+  ];
+
+  function loadVoiceSettings(){
+    api("/api/v1/voice-settings").then(function(d){ state.voiceSettings = d; render(); })
+      .catch(function(err){ showToast(err.message, true); });
+  }
+
+  function voiceSettingsPanelHtml(){
+    if (!state.voiceSettingsOpen) {
+      return '<div class="eg-card" style="margin-bottom:14px"><button class="eg-btn ghost small" id="egVoiceSettingsToggle">Voice AI Call Settings</button></div>';
+    }
+    var s = state.voiceSettings;
+    if (s === null) return '<div class="eg-card" style="margin-bottom:14px"><div class="eg-small eg-muted">Loading settings...</div></div>';
+
+    var hours = s.business_hours || {};
+    var hoursRows = VOICE_SETTINGS_DAYS.map(function(d){
+      var day = hours[d[0]] || {};
+      return '<div class="eg-row" style="gap:8px;align-items:center;margin-bottom:6px">' +
+        '<span class="eg-small" style="width:36px">' + d[1] + '</span>' +
+        '<input class="eg-input" type="time" data-hours-day="' + d[0] + '" data-hours-field="open" value="' + esc(day.open || "") + '" style="max-width:120px" />' +
+        '<span class="eg-small">to</span>' +
+        '<input class="eg-input" type="time" data-hours-day="' + d[0] + '" data-hours-field="close" value="' + esc(day.close || "") + '" style="max-width:120px" />' +
+        '</div>';
+    }).join("");
+
+    var defaultTag = ' <span class="eg-small eg-muted">(default)</span>';
+
+    return '<div class="eg-card" style="margin-bottom:14px">' +
+      '<div class="eg-row"><h3>Voice AI Call Settings</h3><button class="eg-btn ghost small" id="egVoiceSettingsToggle">Close</button></div>' +
+      '<div class="eg-form-row"><label>Welcome Message' + (s.is_welcome_message_default ? defaultTag : "") + '</label><textarea class="eg-textarea" id="egVoiceWelcomeMsg">' + esc(s.welcome_message) + '</textarea></div>' +
+      '<div class="eg-form-row"><label>Human Handoff Number' + (s.human_handoff_number_masked ? ' <span class="eg-small eg-muted">(currently ' + esc(s.human_handoff_number_masked) + ')</span>' : "") + '</label>' +
+      '<input class="eg-input" id="egVoiceHandoffNumber" placeholder="+12015550172, leave blank to keep unchanged" /></div>' +
+      '<div class="eg-form-row"><label>Transfer Message' + (s.is_transfer_message_default ? defaultTag : "") + '</label><textarea class="eg-textarea" id="egVoiceTransferMsg">' + esc(s.transfer_message) + '</textarea></div>' +
+      '<div class="eg-form-row"><label>Human Handoff Ring Timeout (seconds)</label><input class="eg-input" type="number" min="5" max="120" id="egVoiceRingTimeout" value="' + s.ring_timeout_seconds + '" style="max-width:120px" /></div>' +
+      '<div class="eg-form-row"><label>No-Answer Message' + (s.is_no_answer_message_default ? defaultTag : "") + '</label><textarea class="eg-textarea" id="egVoiceNoAnswerMsg">' + esc(s.no_answer_message) + '</textarea></div>' +
+      '<div class="eg-form-row"><label>Business Time Zone <span class="eg-small eg-muted">(IANA name, e.g. America/New_York)</span></label><input class="eg-input" id="egVoiceTimezone" placeholder="America/New_York" value="' + esc(s.timezone || "") + '" style="max-width:240px" /></div>' +
+      '<div class="eg-form-row"><label>Business Hours <span class="eg-small eg-muted">(leave a day blank to mark it closed)</span></label>' + hoursRows + '</div>' +
+      '<div class="eg-form-row"><label>After-Hours Message' + (s.is_after_hours_message_default ? defaultTag : "") + '</label><textarea class="eg-textarea" id="egVoiceAfterHoursMsg">' + esc(s.after_hours_message) + '</textarea></div>' +
+      '<div class="eg-form-row"><label>Emergency Message' + (s.is_emergency_message_default ? defaultTag : "") + '</label><textarea class="eg-textarea" id="egVoiceEmergencyMsg">' + esc(s.emergency_message) + '</textarea>' +
+      '<div class="eg-small eg-muted" style="margin-top:4px">The standard "hang up and call 911" safety line always plays first and can\'t be edited here - this is just the business-specific part that plays after it.</div></div>' +
+      '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px">' +
+      '<button class="eg-btn" id="egVoiceSettingsSave">Save Changes</button>' +
+      '<button class="eg-btn ghost" id="egVoiceSettingsRestore">Restore Default Messages</button>' +
+      '<button class="eg-btn ghost" id="egVoiceSettingsPreview">Preview Message</button>' +
+      '<button class="eg-btn ghost" id="egVoiceSettingsTestHandoff">Test Human Handoff</button>' +
+      '</div>' +
+      '</div>';
+  }
+
+  function bindVoiceSettingsPanel(){
+    var toggle = document.getElementById("egVoiceSettingsToggle");
+    if (toggle) toggle.addEventListener("click", function(){
+      state.voiceSettingsOpen = !state.voiceSettingsOpen;
+      if (state.voiceSettingsOpen && state.voiceSettings === null) loadVoiceSettings();
+      render();
+    });
+    if (!state.voiceSettingsOpen || state.voiceSettings === null) return;
+
+    var save = document.getElementById("egVoiceSettingsSave");
+    if (save) save.addEventListener("click", function(){
+      var businessHours = {};
+      document.querySelectorAll("[data-hours-day]").forEach(function(el){
+        var day = el.getAttribute("data-hours-day");
+        var field = el.getAttribute("data-hours-field");
+        businessHours[day] = businessHours[day] || {};
+        businessHours[day][field] = el.value || null;
+      });
+      var handoffInput = document.getElementById("egVoiceHandoffNumber").value.trim();
+      var body = {
+        welcome_message: document.getElementById("egVoiceWelcomeMsg").value,
+        transfer_message: document.getElementById("egVoiceTransferMsg").value,
+        ring_timeout_seconds: parseInt(document.getElementById("egVoiceRingTimeout").value, 10) || 20,
+        no_answer_message: document.getElementById("egVoiceNoAnswerMsg").value,
+        timezone: document.getElementById("egVoiceTimezone").value.trim() || null,
+        business_hours: businessHours,
+        after_hours_message: document.getElementById("egVoiceAfterHoursMsg").value,
+        emergency_message: document.getElementById("egVoiceEmergencyMsg").value
+      };
+      // Blank means "leave it as it is" here, not "clear it" - unlike the
+      // message fields, an empty Human Handoff Number field is far more
+      // likely to be someone who just didn't touch it than someone
+      // deliberately clearing a working transfer number.
+      if (handoffInput) body.human_handoff_number = handoffInput;
+      save.disabled = true;
+      api("/api/v1/voice-settings", { method: "PUT", body: body })
+        .then(function(d){ state.voiceSettings = d; showToast("Voice settings saved"); render(); })
+        .catch(function(err){ showToast(err.message, true); })
+        .then(function(){ save.disabled = false; });
+    });
+
+    var restore = document.getElementById("egVoiceSettingsRestore");
+    if (restore) restore.addEventListener("click", function(){
+      if (!confirm("Restore all messages to their platform defaults? Business hours and the Human Handoff Number are left as they are.")) return;
+      api("/api/v1/voice-settings/restore-defaults", { method: "POST" })
+        .then(function(d){ state.voiceSettings = d; showToast("Restored to defaults"); render(); })
+        .catch(function(err){ showToast(err.message, true); });
+    });
+
+    var preview = document.getElementById("egVoiceSettingsPreview");
+    if (preview) preview.addEventListener("click", function(){
+      var el = document.getElementById("egVoiceWelcomeMsg");
+      alert("Preview:\n\n" + (el ? el.value : ""));
+    });
+
+    var testHandoff = document.getElementById("egVoiceSettingsTestHandoff");
+    if (testHandoff) testHandoff.addEventListener("click", function(){
+      testHandoff.disabled = true;
+      api("/api/v1/voice-settings/test-handoff", { method: "POST" })
+        .then(function(d){ showToast(d.message, !d.ok); })
+        .catch(function(err){ showToast(err.message, true); })
+        .then(function(){ testHandoff.disabled = false; });
+    });
+  }
+
+  function voiceHtml(){ return voiceSettingsPanelHtml() + channelActivityHtml(CHANNEL_ACTIVITY.voice); }
+  function bindVoice(){ bindVoiceSettingsPanel(); bindChannelActivity(CHANNEL_ACTIVITY.voice); }
   function voiceDrawerHtml(){ return channelDrawerHtml(CHANNEL_ACTIVITY.voice); }
   function whatsappHtml(){ return channelActivityHtml(CHANNEL_ACTIVITY.whatsapp); }
   function bindWhatsapp(){ bindChannelActivity(CHANNEL_ACTIVITY.whatsapp); }
