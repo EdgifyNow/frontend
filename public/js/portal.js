@@ -73,20 +73,22 @@
     tenantSelf: null,
     voiceCaptures: null,
     voiceSearch: "",
-    voiceStatusFilter: "all",
+    voiceStatusFilter: "active",
     voiceTypeFilter: "all",
     voiceSinceFilter: "7d",
     voiceHideTest: false,
     voiceDrawerId: null,
     voiceDrawerDetail: null,
+    voiceLastUpdated: null,
     whatsappCaptures: null,
     whatsappSearch: "",
-    whatsappStatusFilter: "all",
+    whatsappStatusFilter: "active",
     whatsappTypeFilter: "all",
     whatsappSinceFilter: "7d",
     whatsappHideTest: false,
     whatsappDrawerId: null,
-    whatsappDrawerDetail: null
+    whatsappDrawerDetail: null,
+    whatsappLastUpdated: null
   };
 
   function esc(s){
@@ -464,8 +466,9 @@
     if (v === "tenants") ensureTenants();
     if (v === "demo") { ensureAssistants(); ensureDocuments(); }
     if (v === "integrations") ensureWidgetKey();
-    if (v === "voice") loadChannelCaptures(CHANNEL_ACTIVITY.voice);
-    if (v === "whatsapp") loadChannelCaptures(CHANNEL_ACTIVITY.whatsapp);
+    if (v === "voice") { loadChannelCaptures(CHANNEL_ACTIVITY.voice); startChannelAutoRefresh(CHANNEL_ACTIVITY.voice); }
+    else if (v === "whatsapp") { loadChannelCaptures(CHANNEL_ACTIVITY.whatsapp); startChannelAutoRefresh(CHANNEL_ACTIVITY.whatsapp); }
+    else stopChannelAutoRefresh();
     render();
   }
 
@@ -1124,6 +1127,16 @@
   // grid of tiles by what kind of thing each one is.
   var CHANNEL_STATUS_BADGE = { new: "navy", in_progress: "blue", ready: "amber", completed: "green", cancelled: "red" };
   var CHANNEL_STATUS_OPTIONS = ["new", "in_progress", "ready", "completed", "cancelled"];
+  // "Active" isn't a real backend status, it's new+in_progress+ready
+  // combined so the dashboard defaults to a real-time work queue instead
+  // of showing finished/dead activity. Handled entirely client side:
+  // loadChannelCaptures sends no status_filter for it (fetches everything
+  // matching the other filters) and channelActivityHtml drops
+  // completed/cancelled tiles before rendering, so an item disappears from
+  // the Active view the moment a one-touch action marks it done, without
+  // a page reload.
+  var CHANNEL_ACTIVE_STATUSES = ["new", "in_progress", "ready"];
+  var CHANNEL_REFRESH_MS = 7000;
   var CHANNEL_TYPE_COLOR = { order: "red", appointment: "purple", lead: "green", general_inquiry: "blue" };
   var CHANNEL_TYPE_ICON = { order: "&#128722;", appointment: "&#128197;", lead: "&#128100;", general_inquiry: "&#128172;" };
   var CHANNEL_TYPE_OPTIONS = ["order", "appointment", "lead", "general_inquiry"];
@@ -1194,19 +1207,42 @@
     return '<div class="eg-vtile-headline">' + bits.map(esc).join(" &bull; ") + '</div>';
   }
 
-  function loadChannelCaptures(cfg){
+  function loadChannelCaptures(cfg, opts){
     var params = new URLSearchParams();
     params.set("channel", cfg.key);
-    if (state[cfg.statusFilter] !== "all") params.set("status_filter", state[cfg.statusFilter]);
+    // "active" is a client-side grouping (see CHANNEL_ACTIVE_STATUSES), not
+    // a real backend status, so it fetches unfiltered by status and the
+    // completed/cancelled tiles get dropped when rendering instead.
+    if (state[cfg.statusFilter] !== "all" && state[cfg.statusFilter] !== "active") {
+      params.set("status_filter", state[cfg.statusFilter]);
+    }
     if (state[cfg.typeFilter] !== "all") params.set("capture_type", state[cfg.typeFilter]);
     var sinceIso = channelSinceIso(state[cfg.sinceFilter]);
     if (sinceIso) params.set("since", sinceIso);
     if (state[cfg.search]) params.set("search", state[cfg.search]);
     if (state[cfg.hideTest]) params.set("is_test", "false");
+    var silent = opts && opts.silent;
     api("/api/v1/crm/voice-captures?" + params.toString()).then(function(d){
       state[cfg.captures] = d;
-      render();
-    }).catch(function(err){ showToast(err.message, true); });
+      state[cfg.key + "LastUpdated"] = new Date();
+      if (silent) { preserveFocus(render); } else { render(); }
+    }).catch(function(err){ if (!silent) showToast(err.message, true); });
+  }
+
+  function startChannelAutoRefresh(cfg){
+    stopChannelAutoRefresh();
+    state._channelRefreshTimer = setInterval(function(){
+      // A silent background refresh - errors (e.g. a dropped connection)
+      // shouldn't pop a toast every 7 seconds, the next tick just retries.
+      loadChannelCaptures(cfg, { silent: true });
+    }, CHANNEL_REFRESH_MS);
+  }
+
+  function stopChannelAutoRefresh(){
+    if (state._channelRefreshTimer) {
+      clearInterval(state._channelRefreshTimer);
+      state._channelRefreshTimer = null;
+    }
   }
 
   function openChannelDrawer(cfg, id){
@@ -1220,10 +1256,21 @@
   }
 
   function channelActivityHtml(cfg){
-    var statusOptions = ["all"].concat(CHANNEL_STATUS_OPTIONS);
+    // Order and labels match what was asked for exactly: Active first and
+    // selected by default, then the individual statuses, then All statuses
+    // last as the escape hatch.
+    var statusOptions = ["active"].concat(CHANNEL_STATUS_OPTIONS).concat(["all"]);
+    var statusLabel = function(s){
+      if (s === "active") return "Active";
+      if (s === "all") return "All statuses";
+      return channelStatusLabel(s);
+    };
     var typeOptions = ["all"].concat(CHANNEL_TYPE_OPTIONS);
+    var lastUpdated = state[cfg.key + "LastUpdated"];
+    var liveIndicator = '<span class="eg-small eg-muted" style="display:flex;align-items:center;gap:6px;margin-left:auto">' +
+      '<span style="color:#1a9c53">&#9679;</span> Live' + (lastUpdated ? ' &middot; Last updated ' + fmtTime(lastUpdated) : '') + '</span>';
     var filters =
-      '<div class="eg-row" style="margin-bottom:14px;gap:10px;flex-wrap:wrap">' +
+      '<div class="eg-row" style="margin-bottom:14px;gap:10px;flex-wrap:wrap;align-items:center">' +
       '<input class="eg-input" id="' + cfg.idPrefix + 'Search" placeholder="Search name, phone, or summary..." style="max-width:280px" value="' + esc(state[cfg.search]) + '" />' +
       '<select class="eg-select" id="' + cfg.idPrefix + 'TypeFilter" style="width:auto">' +
       typeOptions.map(function(t){
@@ -1232,7 +1279,7 @@
       '</select>' +
       '<select class="eg-select" id="' + cfg.idPrefix + 'StatusFilter" style="width:auto">' +
       statusOptions.map(function(s){
-        return '<option value="' + s + '"' + (s === state[cfg.statusFilter] ? " selected" : "") + '>' + (s === "all" ? "All statuses" : channelStatusLabel(s)) + '</option>';
+        return '<option value="' + s + '"' + (s === state[cfg.statusFilter] ? " selected" : "") + '>' + statusLabel(s) + '</option>';
       }).join("") +
       '</select>' +
       '<select class="eg-select" id="' + cfg.idPrefix + 'SinceFilter" style="width:auto">' +
@@ -1241,10 +1288,18 @@
       }).join("") +
       '</select>' +
       '<label class="eg-small" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="' + cfg.idPrefix + 'HideTest"' + (state[cfg.hideTest] ? ' checked' : '') + ' />Hide my own test messages</label>' +
+      liveIndicator +
       '</div>';
 
-    var captures = state[cfg.captures];
-    if (captures === null) return filters + '<div class="eg-small eg-muted">Loading...</div>';
+    var allCaptures = state[cfg.captures];
+    if (allCaptures === null) return filters + '<div class="eg-small eg-muted">Loading...</div>';
+    // "Active" is filtered client side (see CHANNEL_ACTIVE_STATUSES) so a
+    // tile whose status just flipped to completed/cancelled via a
+    // one-touch action drops out of this view on the next refresh without
+    // needing its own special-case handling.
+    var captures = state[cfg.statusFilter] === "active"
+      ? allCaptures.filter(function(v){ return CHANNEL_ACTIVE_STATUSES.indexOf(v.status) !== -1; })
+      : allCaptures;
     if (!captures.length) return filters + '<div class="eg-card"><div class="eg-small eg-muted">' + esc(cfg.emptyMessage) + '</div></div>';
 
     var tiles = captures.map(function(v){
@@ -1277,10 +1332,16 @@
         ? '<div class="eg-vtile-desc">' + esc(v.summary) + '</div>'
         : '<div class="eg-vtile-headline">' + esc(v.summary) + '</div>';
 
+      // No name on file: show the phone number itself as the heading
+      // instead of the word "Unknown", and skip the redundant phone line
+      // underneath since it's already the heading.
+      var hasName = !!v.contact.name;
+      var heading = hasName ? v.contact.name : (v.contact.phone || "Unknown");
+
       return '<div class="eg-vtile ' + typeColor + '" data-channel-drawer="' + cfg.key + '" data-channel-drawer-id="' + esc(v.id) + '">' +
         '<div class="eg-vtile-top">' +
-        '<div><div class="eg-vtile-name">' + esc(v.contact.name || "Unknown") + (v.contact.is_test ? ' <span class="eg-tag" style="background:#f7d774">TEST</span>' : '') + '</div>' +
-        '<div class="eg-vtile-phone">' + esc(v.contact.phone || "-") + '</div></div>' +
+        '<div><div class="eg-vtile-name">' + esc(heading) + (v.contact.is_test ? ' <span class="eg-tag" style="background:#f7d774">TEST</span>' : '') + '</div>' +
+        (hasName ? '<div class="eg-vtile-phone">' + esc(v.contact.phone || "-") + '</div>' : '') + '</div>' +
         '<span class="eg-pill ' + badgeColor + '">' + channelStatusLabel(v.status) + '</span>' +
         '</div>' +
         '<div class="eg-vtile-typebadge ' + typeColor + '">' + CHANNEL_TYPE_ICON[v.capture_type] + ' ' + esc(channelTypeLabel(v.capture_type)) + '</div>' +
