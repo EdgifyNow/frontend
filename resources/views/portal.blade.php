@@ -87,6 +87,7 @@ a{text-decoration:none;color:inherit}
 .eg-vtile-name{font-weight:650;font-size:14px}
 .eg-vtile-phone{color:var(--muted);font-size:12px;margin-top:2px}
 .eg-vtile-summary{font-size:13px;color:#374151;margin-top:8px;line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.eg-vtile-details{font-size:12px;color:var(--ink);font-weight:600;margin-top:6px}
 .eg-vtile-time{color:var(--muted);font-size:11px;margin-top:10px}
 .eg-vtile-actions{display:flex;gap:8px;margin-top:10px}
 .eg-vtile-actions .eg-btn{flex:1;padding:8px 10px}

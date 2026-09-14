@@ -1149,6 +1149,20 @@
     return String(t || "").split("_").map(function(w){ return w.charAt(0).toUpperCase() + w.slice(1); }).join(" ");
   }
 
+  // Compact one-line operational summary on the tile itself, e.g.
+  // "2 Large Pizzas • Pickup • 6:30 PM", so staff can see the concrete
+  // order/appointment/lead without opening the drawer. details is
+  // whatever free-form fields the model captured (already stripped of
+  // contact_* fields server side), joined in whatever order the backend
+  // returned them - there's no fixed schema to key off since it varies
+  // by capture type and what the visitor actually said.
+  function channelDetailsLine(details){
+    if (!details) return "";
+    var bits = Object.keys(details).map(function(k){ return details[k]; }).filter(function(v){ return v !== null && v !== undefined && v !== ""; });
+    if (!bits.length) return "";
+    return '<div class="eg-vtile-details">' + bits.map(esc).join(" &bull; ") + '</div>';
+  }
+
   function loadChannelCaptures(cfg){
     var params = new URLSearchParams();
     params.set("channel", cfg.key);
@@ -1208,6 +1222,7 @@
         '</div>' +
         '<span class="eg-tag">' + esc(channelTypeLabel(v.capture_type)) + '</span>' +
         '<div class="eg-vtile-summary">' + esc(v.summary) + '</div>' +
+        channelDetailsLine(v.details) +
         '<div class="eg-vtile-time">' + fmtDate(v.created_at) + '</div>' +
         actionsHtml +
         '</div>';
