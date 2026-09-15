@@ -1807,7 +1807,7 @@
       '</div>' +
       '<div class="eg-form-row"><label>Priority</label>' + prioritySelect + '</div>' +
       '<div class="eg-form-row"><label>Notes</label><textarea class="eg-textarea" id="egDrawerNotes" style="min-height:80px">' + esc(r.notes || "") + '</textarea></div>' +
-      '<button class="eg-btn" id="egDrawerSaveStatus">Save changes</button>' +
+      '<button class="eg-btn" id="egDrawerSaveStatus">Save Changes</button>' +
       '<h4>Appointments</h4>' +
       appointmentsHtml() +
       '</aside>';
@@ -1900,7 +1900,7 @@
           showToast("Lead updated");
           render();
         })
-        .catch(function(err){ showToast(err.message, true); saveBtn.disabled = false; saveBtn.textContent = "Save changes"; });
+        .catch(function(err){ showToast(err.message, true); saveBtn.disabled = false; saveBtn.textContent = "Save Changes"; });
     });
     document.querySelectorAll("[data-appt-status]").forEach(function(sel){
       sel.addEventListener("change", function(){
@@ -2289,31 +2289,31 @@
 
     var dash = '<span class="eg-small eg-muted">&mdash;</span>';
 
-    return '<button class="eg-btn ghost" id="egBackToTenants" style="margin-bottom:14px">&larr; Back to clients</button>' +
+    return '<button class="eg-btn ghost" id="egBackToTenants" style="margin-bottom:14px">&larr; Back to Clients</button>' +
       '<div class="eg-grid2">' +
       '<div class="eg-card">' +
       '<h3>Account</h3>' +
       '<div class="eg-small eg-muted" style="margin-bottom:14px">' + esc(t.slug) + ' &middot; Created ' + fmtDate(t.created_at) + '</div>' +
       '<div class="eg-form-row"><label>Status</label><select class="eg-select" id="egDetailStatus">' + statusOptions + '</select></div>' +
       '<div class="eg-form-row"><label>Package</label><input class="eg-input" id="egDetailPackage" value="' + esc(t.package || "") + '" placeholder="e.g. Growth" /></div>' +
-      '<div class="eg-form-row"><label>Negotiated setup price (USD)</label><input class="eg-input" type="number" step="0.01" min="0" id="egDetailSetupPrice" value="' + (t.setup_price_usd === null || t.setup_price_usd === undefined ? "" : t.setup_price_usd) + '" /></div>' +
-      '<div class="eg-form-row"><label>Negotiated recurring price (USD/mo)</label><input class="eg-input" type="number" step="0.01" min="0" id="egDetailRecurringPrice" value="' + (t.recurring_price_usd === null || t.recurring_price_usd === undefined ? "" : t.recurring_price_usd) + '" /></div>' +
-      '<div class="eg-form-row"><label>Package allowance limit <span class="eg-small eg-muted">(AI interactions / mo)</span></label><input class="eg-input" type="number" step="1" min="0" id="egDetailAllowance" value="' + (t.ai_usage_allowance === null || t.ai_usage_allowance === undefined ? "" : t.ai_usage_allowance) + '" /></div>' +
-      '<div class="eg-form-row"><label>Internal comments</label><textarea class="eg-textarea" id="egDetailNotes">' + esc(t.internal_notes || "") + '</textarea></div>' +
-      '<button class="eg-btn" id="egSaveTenantDetail">Save changes</button>' +
+      '<div class="eg-form-row"><label>Negotiated Setup Price (USD)</label><input class="eg-input" type="number" step="0.01" min="0" id="egDetailSetupPrice" value="' + (t.setup_price_usd === null || t.setup_price_usd === undefined ? "" : t.setup_price_usd) + '" /></div>' +
+      '<div class="eg-form-row"><label>Negotiated Recurring Price (USD/mo)</label><input class="eg-input" type="number" step="0.01" min="0" id="egDetailRecurringPrice" value="' + (t.recurring_price_usd === null || t.recurring_price_usd === undefined ? "" : t.recurring_price_usd) + '" /></div>' +
+      '<div class="eg-form-row"><label>Package Allowance Limit <span class="eg-small eg-muted">(AI Interactions / mo)</span></label><input class="eg-input" type="number" step="1" min="0" id="egDetailAllowance" value="' + (t.ai_usage_allowance === null || t.ai_usage_allowance === undefined ? "" : t.ai_usage_allowance) + '" /></div>' +
+      '<div class="eg-form-row"><label>Internal Comments</label><textarea class="eg-textarea" id="egDetailNotes">' + esc(t.internal_notes || "") + '</textarea></div>' +
+      '<button class="eg-btn" id="egSaveTenantDetail">Save Changes</button>' +
       '</div>' +
       '<div class="eg-card">' +
-      '<h3>Usage &amp; channels</h3>' +
-      '<div class="eg-form-row"><label>AI interaction usage (this period)</label><div class="eg-input" style="background:#f7f9fc">' + usageHtml + '</div></div>' +
+      '<h3>Usage &amp; Channels</h3>' +
+      '<div class="eg-form-row"><label>AI Interaction Usage (This Period)</label><div class="eg-input" style="background:#f7f9fc">' + usageHtml + '</div></div>' +
       (featureVoiceWhatsapp() ?
-        '<div class="eg-form-row"><label><input type="checkbox" id="egDetailWhatsappEnabled"' + (t.whatsapp_enabled ? ' checked' : '') + ' style="margin-right:6px" />WhatsApp enabled</label></div>' +
-        '<div class="eg-form-row"><label>WhatsApp number</label><input class="eg-input" id="egDetailWhatsappNumber" value="' + esc(t.whatsapp_number || "") + '" placeholder="+15551234567" /></div>' +
-        '<div class="eg-form-row"><label>WhatsApp welcome message</label><textarea class="eg-textarea" id="egDetailWhatsappWelcome" placeholder="Sent once, on the first message in a new WhatsApp conversation - leave blank to skip straight to the assistant.">' + esc(t.whatsapp_welcome_message || "") + '</textarea></div>' +
-        '<div class="eg-form-row"><label><input type="checkbox" id="egDetailVoiceEnabled"' + (t.voice_enabled ? ' checked' : '') + ' style="margin-right:6px" />Voice AI enabled</label></div>' +
-        '<div class="eg-form-row"><label>Voice number</label><input class="eg-input" id="egDetailVoiceNumber" value="' + esc(t.voice_number || "") + '" placeholder="+15551234567" /></div>' +
-        '<div class="eg-form-row"><label>Test phone numbers <span class="eg-small eg-muted">(comma separated)</span></label><input class="eg-input" id="egDetailTestPhoneNumbers" value="' + esc(t.test_phone_numbers || "") + '" placeholder="+15551234567, +15559876543" /></div>' +
+        '<div class="eg-form-row"><label><input type="checkbox" id="egDetailWhatsappEnabled"' + (t.whatsapp_enabled ? ' checked' : '') + ' style="margin-right:6px" />WhatsApp Enabled</label></div>' +
+        '<div class="eg-form-row"><label>WhatsApp Number</label><input class="eg-input" id="egDetailWhatsappNumber" value="' + esc(t.whatsapp_number || "") + '" placeholder="+15551234567" /></div>' +
+        '<div class="eg-form-row"><label>WhatsApp Welcome Message</label><textarea class="eg-textarea" id="egDetailWhatsappWelcome" placeholder="Sent once, on the first message in a new WhatsApp conversation - leave blank to skip straight to the assistant.">' + esc(t.whatsapp_welcome_message || "") + '</textarea></div>' +
+        '<div class="eg-form-row"><label><input type="checkbox" id="egDetailVoiceEnabled"' + (t.voice_enabled ? ' checked' : '') + ' style="margin-right:6px" />Voice AI Enabled</label></div>' +
+        '<div class="eg-form-row"><label>Voice Number</label><input class="eg-input" id="egDetailVoiceNumber" value="' + esc(t.voice_number || "") + '" placeholder="+15551234567" /></div>' +
+        '<div class="eg-form-row"><label>Test Phone Numbers <span class="eg-small eg-muted">(Comma Separated)</span></label><input class="eg-input" id="egDetailTestPhoneNumbers" value="' + esc(t.test_phone_numbers || "") + '" placeholder="+15551234567, +15559876543" /></div>' +
         '<div class="eg-small eg-muted" style="margin-top:-8px;margin-bottom:14px">Voice/WhatsApp conversations from these numbers are tagged as test so they don\'t mix in with real customer leads.</div>' +
-        '<button class="eg-btn" id="egSaveChannels">Save channel settings</button>'
+        '<button class="eg-btn" id="egSaveChannels">Save Channel Settings</button>'
         : '<div class="eg-small eg-muted">WhatsApp and Voice AI are not part of this release.</div>') +
       '<h3 style="margin-top:18px">Contact</h3>' +
       '<div class="eg-form-row"><label>Contact Name</label><div class="eg-input" style="background:#f7f9fc">' + (t.contact_name ? esc(t.contact_name) : dash) + '</div></div>' +
@@ -2410,7 +2410,7 @@
           render();
         })
         .catch(function(err){ showToast(err.message, true); })
-        .then(function(){ saveBtn.disabled = false; saveBtn.textContent = "Save changes"; });
+        .then(function(){ saveBtn.disabled = false; saveBtn.textContent = "Save Changes"; });
     });
 
     var saveChannelsBtn = document.getElementById("egSaveChannels");
@@ -2436,7 +2436,7 @@
           render();
         })
         .catch(function(err){ showToast(err.message, true); })
-        .then(function(){ saveChannelsBtn.disabled = false; saveChannelsBtn.textContent = "Save channel settings"; });
+        .then(function(){ saveChannelsBtn.disabled = false; saveChannelsBtn.textContent = "Save Channel Settings"; });
     });
   }
 
