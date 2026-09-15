@@ -82,6 +82,8 @@
     voiceDrawerId: null,
     voiceDrawerDetail: null,
     voiceLastUpdated: null,
+    whatsappConnection: null,
+    whatsappConnecting: false,
     whatsappCaptures: null,
     whatsappSearch: "",
     whatsappStatusFilter: "active",
@@ -469,7 +471,7 @@
     if (v === "demo") { ensureAssistants(); ensureDocuments(); }
     if (v === "integrations") ensureWidgetKey();
     if (v === "voice") { loadChannelCaptures(CHANNEL_ACTIVITY.voice); startChannelAutoRefresh(CHANNEL_ACTIVITY.voice); }
-    else if (v === "whatsapp") { loadChannelCaptures(CHANNEL_ACTIVITY.whatsapp); startChannelAutoRefresh(CHANNEL_ACTIVITY.whatsapp); }
+    else if (v === "whatsapp") { loadWhatsappConnection(); loadChannelCaptures(CHANNEL_ACTIVITY.whatsapp); startChannelAutoRefresh(CHANNEL_ACTIVITY.whatsapp); }
     else stopChannelAutoRefresh();
     render();
   }
@@ -1597,8 +1599,142 @@
   function voiceHtml(){ return voiceSettingsPanelHtml() + channelActivityHtml(CHANNEL_ACTIVITY.voice); }
   function bindVoice(){ bindVoiceSettingsPanel(); bindChannelActivity(CHANNEL_ACTIVITY.voice); }
   function voiceDrawerHtml(){ return channelDrawerHtml(CHANNEL_ACTIVITY.voice); }
-  function whatsappHtml(){ return channelActivityHtml(CHANNEL_ACTIVITY.whatsapp); }
-  function bindWhatsapp(){ bindChannelActivity(CHANNEL_ACTIVITY.whatsapp); }
+
+  // ---- WhatsApp connection (Embedded Signup / Coexistence) - a business
+  // connects its own real WhatsApp Business number without giving up the
+  // WhatsApp Business mobile app. Uses Meta's Facebook JS SDK login popup;
+  // the SDK is loaded lazily, only once, the first time this panel is
+  // actually opened, since most sessions never touch it.
+  var FB_SDK_LOADING = false;
+  var FB_SDK_READY = false;
+
+  function loadFacebookSdk(onReady){
+    if (FB_SDK_READY) { onReady(); return; }
+    if (typeof window.FB !== "undefined") { FB_SDK_READY = true; onReady(); return; }
+    if (FB_SDK_LOADING) {
+      var prevInit = window.fbAsyncInit;
+      window.fbAsyncInit = function(){ if (prevInit) prevInit(); onReady(); };
+      return;
+    }
+    FB_SDK_LOADING = true;
+    window.fbAsyncInit = function(){
+      FB_SDK_READY = true;
+      window.FB.init({ appId: state.whatsappConnection && state.whatsappConnection.app_id, autoLogAppEvents: true, xfbml: false, version: "v20.0" });
+      onReady();
+    };
+    var script = document.createElement("script");
+    script.src = "https://connect.facebook.net/en_US/sdk.js";
+    script.async = true;
+    script.defer = true;
+    script.crossOrigin = "anonymous";
+    document.body.appendChild(script);
+  }
+
+  function loadWhatsappConnection(){
+    Promise.all([
+      api("/api/v1/integrations/whatsapp/embedded-signup-config"),
+      api("/api/v1/integrations/whatsapp/status")
+    ]).then(function(results){
+      state.whatsappConnection = Object.assign({}, results[0], results[1]);
+      render();
+    }).catch(function(err){ showToast(err.message, true); });
+  }
+
+  function whatsappConnectPanelHtml(){
+    var c = state.whatsappConnection;
+    if (c === null) return '<div class="eg-card" style="margin-bottom:14px"><div class="eg-small eg-muted">Loading connection status...</div></div>';
+
+    if (c.connected) {
+      return '<div class="eg-card" style="margin-bottom:14px">' +
+        '<div class="eg-row"><h3>WhatsApp Connection</h3><span class="eg-pill green">Connected</span></div>' +
+        '<div class="eg-kv"><span>Phone</span><b>' + esc(c.phone_number || "-") + '</b></div>' +
+        '<div class="eg-kv"><span>WhatsApp Business App</span><b>Active</b></div>' +
+        '<div class="eg-kv"><span>EdgifyNow AI</span><b>Active</b></div>' +
+        '<div class="eg-kv"><span>Connection</span><b>' + (c.coexistence ? "Coexistence" : "Direct") + '</b></div>' +
+        (c.token_expires_at ? '<div class="eg-kv"><span>Token expires</span><b>' + fmtDate(c.token_expires_at) + '</b></div>' : "") +
+        '<div style="display:flex;gap:10px;margin-top:10px">' +
+        '<button class="eg-btn ghost" id="egWhatsappReconnect"' + (c.app_id ? "" : " disabled") + '>Reconnect</button>' +
+        '<button class="eg-btn danger" id="egWhatsappDisconnect">Disconnect</button>' +
+        '</div></div>';
+    }
+
+    return '<div class="eg-card" style="margin-bottom:14px">' +
+      '<div class="eg-row"><h3>WhatsApp Connection</h3><span class="eg-pill">Not Connected</span></div>' +
+      '<p class="eg-small eg-muted" style="margin-top:-6px">Connect your existing WhatsApp Business number. You can continue using the WhatsApp Business app.</p>' +
+      (c.app_id
+        ? '<button class="eg-btn" id="egWhatsappConnect"' + (state.whatsappConnecting ? " disabled" : "") + '>' + (state.whatsappConnecting ? "Connecting..." : "Connect WhatsApp") + '</button>'
+        : '<div class="eg-small eg-muted">WhatsApp connection isn\'t configured on this server yet (missing Meta app id).</div>') +
+      '</div>';
+  }
+
+  function completeWhatsappEmbeddedSignup(code, wabaId, phoneNumberId, displayPhoneNumber){
+    state.whatsappConnecting = true;
+    render();
+    api("/api/v1/integrations/whatsapp/embedded-signup/complete", {
+      method: "POST",
+      body: { code: code, waba_id: wabaId, phone_number_id: phoneNumberId, display_phone_number: displayPhoneNumber }
+    }).then(function(d){
+      state.whatsappConnection = Object.assign({}, state.whatsappConnection, d);
+      state.whatsappConnecting = false;
+      showToast("WhatsApp connected");
+      render();
+    }).catch(function(err){
+      state.whatsappConnecting = false;
+      showToast(err.message, true);
+      render();
+    });
+  }
+
+  function launchWhatsappEmbeddedSignup(){
+    var c = state.whatsappConnection;
+    if (!c || !c.app_id) return;
+
+    var sessionInfo = null;
+    var messageListener = function(event){
+      if (event.origin !== "https://www.facebook.com" && event.origin !== "https://web.facebook.com") return;
+      var data;
+      try { data = JSON.parse(event.data); } catch(e) { return; }
+      if (data && data.type === "WA_EMBEDDED_SIGNUP" && data.event === "FINISH") {
+        sessionInfo = data.data || {};
+      }
+    };
+    window.addEventListener("message", messageListener);
+
+    loadFacebookSdk(function(){
+      window.FB.login(function(response){
+        window.removeEventListener("message", messageListener);
+        var code = response && response.authResponse && response.authResponse.code;
+        if (!code || !sessionInfo || !sessionInfo.waba_id || !sessionInfo.phone_number_id) {
+          showToast("WhatsApp connection was cancelled or didn't complete", true);
+          return;
+        }
+        completeWhatsappEmbeddedSignup(code, sessionInfo.waba_id, sessionInfo.phone_number_id, sessionInfo.display_phone_number || null);
+      }, {
+        config_id: c.config_id,
+        response_type: "code",
+        override_default_response_type: true,
+        extras: { setup: {}, featureType: "whatsapp_business_app_onboarding", sessionInfoVersion: "3" }
+      });
+    });
+  }
+
+  function bindWhatsappConnectPanel(){
+    var connectBtn = document.getElementById("egWhatsappConnect");
+    if (connectBtn) connectBtn.addEventListener("click", launchWhatsappEmbeddedSignup);
+    var reconnectBtn = document.getElementById("egWhatsappReconnect");
+    if (reconnectBtn) reconnectBtn.addEventListener("click", launchWhatsappEmbeddedSignup);
+    var disconnectBtn = document.getElementById("egWhatsappDisconnect");
+    if (disconnectBtn) disconnectBtn.addEventListener("click", function(){
+      if (!confirm("Disconnect WhatsApp? EdgifyNow AI will stop replying on this number. Your WhatsApp Business mobile app and Meta account are not affected.")) return;
+      disconnectBtn.disabled = true;
+      api("/api/v1/integrations/whatsapp/disconnect", { method: "POST" })
+        .then(function(){ showToast("WhatsApp disconnected"); loadWhatsappConnection(); })
+        .catch(function(err){ showToast(err.message, true); disconnectBtn.disabled = false; });
+    });
+  }
+
+  function whatsappHtml(){ return whatsappConnectPanelHtml() + channelActivityHtml(CHANNEL_ACTIVITY.whatsapp); }
+  function bindWhatsapp(){ bindWhatsappConnectPanel(); bindChannelActivity(CHANNEL_ACTIVITY.whatsapp); }
   function whatsappDrawerHtml(){ return channelDrawerHtml(CHANNEL_ACTIVITY.whatsapp); }
   function bindAllChannelDrawers(){
     bindChannelDrawer(CHANNEL_ACTIVITY.voice);
