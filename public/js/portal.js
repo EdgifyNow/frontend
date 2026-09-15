@@ -58,6 +58,7 @@
     overviewKebabId: null,
     leadDrawerId: null,
     leadAppointments: null,
+    contactDrawerId: null,
     widgetKey: undefined, // undefined = not fetched yet, null = fetched, none exists
     widgetIdDraft: "",
     leadPage: 1,
@@ -589,7 +590,7 @@
       '</div>' +
       '<div id="egContent"></div>' +
       '</main>' +
-      '</div>' + toastHtml + leadDrawerHtml() + voiceDrawerHtml() + whatsappDrawerHtml();
+      '</div>' + toastHtml + leadDrawerHtml() + contactDrawerHtml() + voiceDrawerHtml() + whatsappDrawerHtml();
 
     document.querySelectorAll("[data-nav]").forEach(function(el){
       el.addEventListener("click", function(){
@@ -599,6 +600,7 @@
       });
     });
     bindDrawer();
+    bindContactDrawer();
     bindAllChannelDrawers();
 
     renderContent();
@@ -1021,7 +1023,13 @@
         '<td>' + statusPill(r.status) + '</td>' +
         '<td>' + esc(capitalize(r.priority)) + '</td>' +
         '<td class="eg-small eg-muted">' + fmtDate(r.last_activity_at) + '</td>' +
-        '<td class="eg-small eg-muted">' + fmtDate(r.created_at) + '</td></tr>';
+        '<td class="eg-small eg-muted">' + fmtDate(r.created_at) + '</td>' +
+        // No separate click handler needed on this button - it's inside the
+        // <tr> above, so a click bubbles up to that row's own
+        // data-lead-drawer listener. It exists purely to make "clicking a
+        // row opens an editable detail panel" visible instead of an
+        // undiscoverable hover-cursor affordance.
+        '<td><button class="eg-btn ghost" style="padding:4px 10px">Edit</button></td></tr>';
     }).join("");
     return '<div class="eg-card">' +
       '<div class="eg-toolbar">' +
@@ -1031,7 +1039,7 @@
       '<select id="egLeadSourceFilter">' + selOpts([{value:"all",label:"All Sources"},{value:"website_form",label:"Website Form"},{value:"website_chat",label:"Website chat"},{value:"whatsapp",label:"WhatsApp"},{value:"voice",label:"Voice"},{value:"manual",label:"Manual"}], state.leadSourceFilter) + '</select>' +
       '<button class="eg-btn" id="egDownloadLeadsCsv">Download Leads CSV</button>' +
       '</div>' +
-      (lrows ? '<table class="eg-table"><thead><tr><th>Lead</th><th>Interest</th><th>Source</th><th>Status</th><th>Priority</th><th>Last Activity</th><th>Created</th></tr></thead><tbody>' + lrows + '</tbody></table>' : '<div class="eg-empty">' + (state.leadSearch ? "No matching leads." : "No leads in this period.") + '</div>') +
+      (lrows ? '<table class="eg-table"><thead><tr><th>Lead</th><th>Interest</th><th>Source</th><th>Status</th><th>Priority</th><th>Last Activity</th><th>Created</th><th>Actions</th></tr></thead><tbody>' + lrows + '</tbody></table>' : '<div class="eg-empty">' + (state.leadSearch ? "No matching leads." : "No leads in this period.") + '</div>') +
       pagerHtml("egLead", page, "leads") +
       (state.leadDateFilter !== "all" ? '<div class="eg-small eg-muted" style="margin-top:10px">Only showing leads from the selected period. Older leads aren\'t deleted - switch to "All Time" or use Download Leads CSV to get full history.</div>' : "") +
       '</div>';
@@ -1042,7 +1050,9 @@
     var filtered = filteredContacts();
     var page = paginate(filtered, state.contactPage);
     var crows = page.pageItems.map(function(c){
-      return '<tr><td><b>' + esc(contactName(c)) + '</b></td><td>' + esc(c.email || "-") + '</td><td>' + esc(c.phone || "-") + '</td><td>' + esc(c.company || "-") + '</td><td>' + esc(c.preferred_channel || "-") + '</td><td class="eg-small eg-muted">' + fmtDate(c.last_interaction_at) + '</td><td class="eg-small eg-muted">' + fmtDate(c.created_at) + '</td></tr>';
+      return '<tr class="eg-clickrow" style="cursor:pointer" data-contact-drawer="' + esc(c.id) + '">' +
+        '<td><b>' + esc(contactName(c)) + '</b></td><td>' + esc(c.email || "-") + '</td><td>' + esc(c.phone || "-") + '</td><td>' + esc(c.company || "-") + '</td><td>' + esc(c.preferred_channel || "-") + '</td><td class="eg-small eg-muted">' + fmtDate(c.last_interaction_at) + '</td><td class="eg-small eg-muted">' + fmtDate(c.created_at) + '</td>' +
+        '<td><button class="eg-btn ghost" style="padding:4px 10px">View</button></td></tr>';
     }).join("");
     return '<div class="eg-card">' +
       '<div class="eg-toolbar">' +
@@ -1050,7 +1060,7 @@
       '<select id="egContactDateFilter">' + selOpts([{value:"month",label:"This month"},{value:"quarter",label:"This Quarter"},{value:"year",label:"This year"},{value:"all",label:"All Time"}], state.contactDateFilter) + '</select>' +
       '<button class="eg-btn" id="egDownloadContactsCsv">Download Contacts CSV</button>' +
       '</div>' +
-      (crows ? '<table class="eg-table"><thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Company</th><th>Preferred Channel</th><th>Last Interaction</th><th>Created</th></tr></thead><tbody>' + crows + '</tbody></table>' : '<div class="eg-empty">' + (state.contactSearch ? "No matching contacts." : "No contacts in this period.") + '</div>') +
+      (crows ? '<table class="eg-table"><thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Company</th><th>Preferred Channel</th><th>Last Interaction</th><th>Created</th><th>Actions</th></tr></thead><tbody>' + crows + '</tbody></table>' : '<div class="eg-empty">' + (state.contactSearch ? "No matching contacts." : "No contacts in this period.") + '</div>') +
       pagerHtml("egContact", page, "contacts") +
       (state.contactDateFilter !== "all" ? '<div class="eg-small eg-muted" style="margin-top:10px">Only showing contacts created in the selected period. Older contacts aren\'t deleted - switch to "All Time" or use Download Contacts CSV to get full history.</div>' : "") +
       '</div>';
@@ -1074,6 +1084,9 @@
     });
     document.querySelectorAll("[data-lead-drawer]").forEach(function(el){
       el.addEventListener("click", function(){ openLeadDrawer(el.getAttribute("data-lead-drawer")); });
+    });
+    document.querySelectorAll("[data-contact-drawer]").forEach(function(el){
+      el.addEventListener("click", function(){ state.contactDrawerId = el.getAttribute("data-contact-drawer"); render(); });
     });
 
     var leadSearch = document.getElementById("egLeadSearch");
@@ -1798,6 +1811,39 @@
       '<h4>Appointments</h4>' +
       appointmentsHtml() +
       '</aside>';
+  }
+
+  // ---- Contact detail drawer ----
+  // View-only, by design: GET /api/v1/crm/contacts is the only contacts
+  // endpoint that exists (confirmed against the current openapi.json) -
+  // there is no PATCH/PUT for contacts at all, so nothing here can be
+  // saved back. That's a backend gap to raise on the API side, not
+  // something missing from this binding.
+  function contactDrawerHtml(){
+    if (!state.contactDrawerId) return "";
+    var c = (state.contacts || []).filter(function(x){ return x.id === state.contactDrawerId; })[0];
+    if (!c) return "";
+    return '<div class="eg-drawer-backdrop open" id="egContactDrawerBackdrop"></div>' +
+      '<aside class="eg-drawer open">' +
+      '<button class="eg-drawer-close" id="egContactDrawerClose" aria-label="Close">&times;</button>' +
+      '<h2>' + esc(contactName(c)) + '</h2>' +
+      '<div class="eg-drawer-sub">' + esc(c.company || "Contact") + '</div>' +
+      '<div class="eg-small eg-muted" style="margin:-6px 0 14px">Contact details aren\'t editable yet - the backend has no update endpoint for contacts. Let support know if anything here needs correcting.</div>' +
+      '<h4>Contact</h4>' +
+      '<div class="eg-kv"><span>Email</span><b>' + esc(c.email || "-") + '</b></div>' +
+      '<div class="eg-kv"><span>Phone</span><b>' + esc(c.phone || "-") + '</b></div>' +
+      '<div class="eg-kv"><span>Company</span><b>' + esc(c.company || "-") + '</b></div>' +
+      '<div class="eg-kv"><span>Job title</span><b>' + esc(c.job_title || "-") + '</b></div>' +
+      '<div class="eg-kv"><span>Preferred Channel</span><b>' + esc(c.preferred_channel || "-") + '</b></div>' +
+      '<div class="eg-kv"><span>Last Interaction</span><b>' + fmtDate(c.last_interaction_at) + '</b></div>' +
+      '<div class="eg-kv"><span>Created</span><b>' + fmtDate(c.created_at) + '</b></div>' +
+      '</aside>';
+  }
+  function bindContactDrawer(){
+    var backdrop = document.getElementById("egContactDrawerBackdrop");
+    if (backdrop) backdrop.addEventListener("click", function(){ state.contactDrawerId = null; render(); });
+    var closeBtn = document.getElementById("egContactDrawerClose");
+    if (closeBtn) closeBtn.addEventListener("click", function(){ state.contactDrawerId = null; render(); });
   }
 
   // Journey C: a visitor books via the widget (POST /api/v1/public/
