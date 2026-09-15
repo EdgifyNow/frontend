@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "edgifynow-portal",
+      "runtimeExecutable": "php",
+      "runtimeArgs": ["artisan", "serve", "--port=8901"],
+      "port": 8901
+    }
+  ]
+}
