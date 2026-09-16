@@ -1210,6 +1210,24 @@
     return String(t || "").split("_").map(function(w){ return w.charAt(0).toUpperCase() + w.slice(1); }).join(" ");
   }
 
+  // A captured detail value isn't always a plain string - the model can
+  // capture a list of order items as an array of {name, quantity, ...}
+  // objects instead of one flat string, and String(anObject) renders as
+  // the useless literal "[object Object]". Recurses so an array of
+  // objects, or an object nested inside one, still ends up as readable
+  // text instead of that.
+  function formatDetailValue(v){
+    if (v === null || v === undefined || v === "") return "";
+    if (Array.isArray(v)) return v.map(formatDetailValue).filter(function(s){ return s !== ""; }).join(", ");
+    if (typeof v === "object") {
+      return Object.keys(v).map(function(k){
+        var inner = formatDetailValue(v[k]);
+        return inner ? (k + ": " + inner) : "";
+      }).filter(function(s){ return s !== ""; }).join(", ");
+    }
+    return String(v);
+  }
+
   // Compact one-line operational summary on the tile itself, e.g.
   // "2 Large Pizzas • Pickup • 6:30 PM", so staff can see the concrete
   // order/appointment/lead without opening the drawer. details is
@@ -1219,7 +1237,7 @@
   // by capture type and what the visitor actually said.
   function channelDetailsLine(details){
     if (!details) return "";
-    var bits = Object.keys(details).map(function(k){ return details[k]; }).filter(function(v){ return v !== null && v !== undefined && v !== ""; });
+    var bits = Object.keys(details).map(function(k){ return formatDetailValue(details[k]); }).filter(function(v){ return v !== ""; });
     if (!bits.length) return "";
     return '<div class="eg-vtile-headline">' + bits.map(esc).join(" &bull; ") + '</div>';
   }
@@ -1456,7 +1474,7 @@
       '<div style="line-height:1.55;font-size:13px">' + esc(d.summary) + '</div>' +
       (d.details && Object.keys(d.details).length
         ? '<h4>Details</h4>' + Object.keys(d.details).map(function(k){
-            return '<div class="eg-kv"><span>' + esc(k) + '</span><b>' + esc(d.details[k]) + '</b></div>';
+            return '<div class="eg-kv"><span>' + esc(k) + '</span><b>' + esc(formatDetailValue(d.details[k])) + '</b></div>';
           }).join("")
         : "") +
       '<h4>Status</h4>' +
