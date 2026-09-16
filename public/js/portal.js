@@ -1267,6 +1267,13 @@
   function startChannelAutoRefresh(cfg){
     stopChannelAutoRefresh();
     state._channelRefreshTimer = setInterval(function(){
+      // Skip this tick entirely while the Voice Settings form is open -
+      // loadChannelCaptures's silent refresh calls render(), which
+      // rebuilds the whole page from state including that form, wiping
+      // out whatever the owner has typed but not saved yet. The activity
+      // tiles just go a beat stale until the form is closed or saved,
+      // which is a fair trade against silently losing their edits.
+      if (cfg.key === "voice" && state.voiceSettingsOpen) return;
       // A silent background refresh - errors (e.g. a dropped connection)
       // shouldn't pop a toast every 7 seconds, the next tick just retries.
       loadChannelCaptures(cfg, { silent: true });
