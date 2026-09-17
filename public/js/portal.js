@@ -311,6 +311,13 @@
   }
   function resetIdleTimer(){
     if (!state.token) { stopIdleTimer(); return; }
+    // While the Meta Embedded Signup popup is open, the user is actively
+    // filling out Meta's own form in a separate window - this window
+    // never sees a mousedown/keydown/scroll during that, so the idle
+    // timer would otherwise count down and log them out mid-flow. The
+    // client's own report: the session expired while the popup was open,
+    // and the completion request that followed got rejected outright.
+    if (state.whatsappSignupInProgress) { stopIdleTimer(); return; }
     if (idleTimer) clearTimeout(idleTimer);
     idleTimer = setTimeout(function(){
       doLogout();
@@ -1685,7 +1692,7 @@
     if (c.connected) {
       return '<div class="eg-card" style="margin-bottom:14px">' +
         '<div class="eg-row"><h3>WhatsApp Connection</h3><span class="eg-pill green">Connected</span></div>' +
-        '<div class="eg-kv"><span>Phone</span><b>' + esc(c.phone_number || "-") + '</b></div>' +
+        '<div class="eg-kv"><span>Phone</span><b>' + esc(c.phone_number || "Virtual number pending Meta approval") + '</b></div>' +
         '<div class="eg-kv"><span>WhatsApp Business App</span><b>Active</b></div>' +
         '<div class="eg-kv"><span>EdgifyNow AI</span><b>Active</b></div>' +
         '<div class="eg-kv"><span>Connection</span><b>' + (c.coexistence ? "Coexistence" : "Direct") + '</b></div>' +
@@ -1714,11 +1721,24 @@
     }).then(function(d){
       state.whatsappConnection = Object.assign({}, state.whatsappConnection, d);
       state.whatsappConnecting = false;
+      state.whatsappSignupInProgress = false;
       showToast("WhatsApp connected");
       render();
     }).catch(function(err){
       state.whatsappConnecting = false;
-      showToast(err.message, true);
+      state.whatsappSignupInProgress = false;
+      // A session that expired or was otherwise invalidated during the
+      // popup leaves state.token cleared by api()'s own 401 handling
+      // (or, for a stale token with no Authorization header at all, a
+      // bare 403) - Meta has already created the WABA/phone number by
+      // this point, so the recovery is to log back in and use Reconnect
+      // with the same number, never to restart Embedded Signup from
+      // scratch and risk a second Meta asset for the same business.
+      if (!state.token) {
+        showToast("Your session expired while completing WhatsApp setup. Meta already created your number - please log in again, then use Reconnect rather than starting over.", true);
+      } else {
+        showToast(err.message, true);
+      }
       render();
     });
   }
@@ -1726,6 +1746,9 @@
   function launchWhatsappEmbeddedSignup(){
     var c = state.whatsappConnection;
     if (!c || !c.app_id) return;
+
+    state.whatsappSignupInProgress = true;
+    stopIdleTimer();
 
     var sessionInfo = null;
     var messageListener = function(event){
@@ -1743,6 +1766,8 @@
         window.removeEventListener("message", messageListener);
         var code = response && response.authResponse && response.authResponse.code;
         if (!code || !sessionInfo || !sessionInfo.waba_id || !sessionInfo.phone_number_id) {
+          state.whatsappSignupInProgress = false;
+          resetIdleTimer();
           showToast("WhatsApp connection was cancelled or didn't complete", true);
           return;
         }
