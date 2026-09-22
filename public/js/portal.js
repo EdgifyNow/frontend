@@ -74,6 +74,10 @@
     tenantSelf: null,
     voiceSettings: null,
     voiceSettingsOpen: false,
+    smsSettings: null,
+    smsSettingsOpen: false,
+    smsActivity: null,
+    smsActivityOpen: false,
     voiceCaptures: null,
     voiceSearch: "",
     voiceStatusFilter: "active",
@@ -1280,7 +1284,7 @@
       // out whatever the owner has typed but not saved yet. The activity
       // tiles just go a beat stale until the form is closed or saved,
       // which is a fair trade against silently losing their edits.
-      if (cfg.key === "voice" && state.voiceSettingsOpen) return;
+      if (cfg.key === "voice" && (state.voiceSettingsOpen || state.smsSettingsOpen)) return;
       // A silent background refresh - errors (e.g. a dropped connection)
       // shouldn't pop a toast every 7 seconds, the next tick just retries.
       loadChannelCaptures(cfg, { silent: true });
@@ -1641,8 +1645,106 @@
     });
   }
 
-  function voiceHtml(){ return voiceSettingsPanelHtml() + channelActivityHtml(CHANNEL_ACTIVITY.voice); }
-  function bindVoice(){ bindVoiceSettingsPanel(); bindChannelActivity(CHANNEL_ACTIVITY.voice); }
+  // SMS Appointment Reminders: a confirmation text at a lead time the
+  // business picks (default 48h, reply 1 to confirm) and a standard text
+  // fixed at 24h before, sent regardless of the confirmation reply. Off by
+  // default per tenant. Shown on the Voice page alongside Voice AI Call
+  // Settings since appointment booking is shared across channels, not
+  // Voice-specific.
+  function loadSmsSettings(){
+    api("/api/v1/sms-settings").then(function(d){ state.smsSettings = d; render(); })
+      .catch(function(err){ showToast(err.message, true); });
+  }
+
+  function loadSmsActivity(){
+    api("/api/v1/crm/appointment-reminders?limit=100").then(function(d){ state.smsActivity = d; render(); })
+      .catch(function(err){ showToast(err.message, true); });
+  }
+
+  function smsSettingsPanelHtml(){
+    if (!state.smsSettingsOpen) {
+      return '<div class="eg-card" style="margin-bottom:14px"><button class="eg-btn ghost small" id="egSmsSettingsToggle">SMS Appointment Reminders</button></div>';
+    }
+    var s = state.smsSettings;
+    if (s === null) return '<div class="eg-card" style="margin-bottom:14px"><div class="eg-small eg-muted">Loading settings...</div></div>';
+
+    var defaultTag = ' <span class="eg-small eg-muted">(default)</span>';
+    return '<div class="eg-card" style="margin-bottom:14px">' +
+      '<div class="eg-row"><h3>SMS Appointment Reminders</h3><button class="eg-btn ghost small" id="egSmsSettingsToggle">Close</button></div>' +
+      (s.sms_number_configured ? "" : '<div class="eg-small" style="color:#b45309;margin-bottom:8px">No SMS-capable number configured yet - set up Voice AI Call Settings with a phone number first, texts send from the same number as calls.</div>') +
+      '<div class="eg-form-row"><label><input type="checkbox" id="egSmsEnabled"' + (s.enabled ? " checked" : "") + ' /> Send SMS appointment reminders</label></div>' +
+      '<div class="eg-form-row"><label>Confirmation Reminder Lead Time (hours before the appointment)</label><input class="eg-input" type="number" min="1" max="720" id="egSmsLeadHours" value="' + s.confirmation_lead_hours + '" style="max-width:120px" /></div>' +
+      '<div class="eg-form-row"><label>Confirmation Message' + (s.is_confirmation_message_default ? defaultTag : "") + ' <span class="eg-small eg-muted">(must include {name} and {when})</span></label><textarea class="eg-textarea" id="egSmsConfirmationMsg">' + esc(s.confirmation_message) + '</textarea></div>' +
+      '<div class="eg-small eg-muted">A second, standard reminder is always sent ' + s.standard_lead_hours + ' hours before the appointment too, whether or not the confirmation was replied to - its wording is fixed, not configurable here.</div>' +
+      '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px">' +
+      '<button class="eg-btn" id="egSmsSettingsSave">Save Changes</button>' +
+      '</div>' +
+      '</div>';
+  }
+
+  function bindSmsSettingsPanel(){
+    var toggle = document.getElementById("egSmsSettingsToggle");
+    if (toggle) toggle.addEventListener("click", function(){
+      state.smsSettingsOpen = !state.smsSettingsOpen;
+      if (state.smsSettingsOpen && state.smsSettings === null) loadSmsSettings();
+      render();
+    });
+    if (!state.smsSettingsOpen || state.smsSettings === null) return;
+
+    var save = document.getElementById("egSmsSettingsSave");
+    if (save) save.addEventListener("click", function(){
+      var body = {
+        enabled: document.getElementById("egSmsEnabled").checked,
+        confirmation_lead_hours: parseInt(document.getElementById("egSmsLeadHours").value, 10) || 48,
+        confirmation_message: document.getElementById("egSmsConfirmationMsg").value
+      };
+      save.disabled = true;
+      api("/api/v1/sms-settings", { method: "PUT", body: body })
+        .then(function(d){ state.smsSettings = d; showToast("SMS reminder settings saved"); render(); })
+        .catch(function(err){ showToast(err.message, true); })
+        .then(function(){ save.disabled = false; });
+    });
+  }
+
+  function smsActivityHtml(){
+    if (!state.smsActivityOpen) {
+      return '<div class="eg-card" style="margin-bottom:14px"><button class="eg-btn ghost small" id="egSmsActivityToggle">SMS Activity</button></div>';
+    }
+    var rows = state.smsActivity;
+    if (rows === null) return '<div class="eg-card" style="margin-bottom:14px"><div class="eg-small eg-muted">Loading SMS activity...</div></div>';
+
+    var KIND_LABEL = { sms_confirmation: "Confirmation", sms_standard: "Standard" };
+    var STATUS_COLOR = { sent: "#15803d", failed: "#b91c1c", queued: "#6b7280" };
+    var body = rows.length === 0
+      ? '<div class="eg-small eg-muted">No SMS reminders sent yet.</div>'
+      : rows.map(function(r){
+          var when = r.appointment_start_at ? fmtDate(r.appointment_start_at) : "-";
+          var who = (r.contact_name || "Unknown") + (r.contact_phone ? " (" + r.contact_phone + ")" : "");
+          var statusColor = STATUS_COLOR[r.status] || "#374151";
+          return '<div class="eg-row" style="gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px solid #eee">' +
+            '<div style="flex:1"><b>' + esc(who) + '</b> <span class="eg-small eg-muted">' + esc(KIND_LABEL[r.kind] || r.kind) + ' for appointment at ' + esc(when) + '</span>' +
+            (r.failure_reason ? '<div class="eg-small" style="color:#b91c1c">' + esc(r.failure_reason) + '</div>' : '') + '</div>' +
+            '<span class="eg-small" style="color:' + statusColor + '">' + esc(r.status) + '</span>' +
+            '</div>';
+        }).join("");
+
+    return '<div class="eg-card" style="margin-bottom:14px">' +
+      '<div class="eg-row"><h3>SMS Activity</h3><button class="eg-btn ghost small" id="egSmsActivityToggle">Close</button></div>' +
+      body +
+      '</div>';
+  }
+
+  function bindSmsActivity(){
+    var toggle = document.getElementById("egSmsActivityToggle");
+    if (toggle) toggle.addEventListener("click", function(){
+      state.smsActivityOpen = !state.smsActivityOpen;
+      if (state.smsActivityOpen) loadSmsActivity();
+      render();
+    });
+  }
+
+  function voiceHtml(){ return voiceSettingsPanelHtml() + smsSettingsPanelHtml() + smsActivityHtml() + channelActivityHtml(CHANNEL_ACTIVITY.voice); }
+  function bindVoice(){ bindVoiceSettingsPanel(); bindSmsSettingsPanel(); bindSmsActivity(); bindChannelActivity(CHANNEL_ACTIVITY.voice); }
   function voiceDrawerHtml(){ return channelDrawerHtml(CHANNEL_ACTIVITY.voice); }
 
   // ---- WhatsApp connection (Embedded Signup / Coexistence) - a business
