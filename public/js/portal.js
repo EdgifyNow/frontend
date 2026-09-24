@@ -966,6 +966,21 @@
     return '<span class="' + cls + '">' + esc(capitalize(s)) + '</span>';
   }
 
+  // Set by the backend when an assistant captured an appointment request
+  // it couldn't put on the calendar (see Lead.needs_manual_scheduling);
+  // cleared server-side once a real appointment is scheduled for the lead.
+  var MANUAL_SCHEDULING_REASONS = {
+    missing_fields: "No date or time was given",
+    unparseable: "The requested time couldn't be understood",
+    past_time: "The requested time has already passed",
+    slot_conflict: "The requested time is already taken"
+  };
+  function manualSchedulingBadge(lead){
+    if (!lead || !lead.needs_manual_scheduling) return "";
+    var reason = MANUAL_SCHEDULING_REASONS[lead.manual_scheduling_reason] || "";
+    return ' <span class="eg-pill red" data-manual-scheduling title="' + esc(reason) + '">Needs manual scheduling</span>';
+  }
+
   // ---- Leads & Contacts ----
   // Matches the client dashboard mockup: leads and contacts stay separate
   // records (both in the API and here), search/filter/sort happen in the
@@ -1031,7 +1046,7 @@
         '<td><b>' + esc(contactName(r.contact)) + '</b></td>' +
         '<td>' + esc(r.service_interest || r.title || "-") + '</td>' +
         '<td><span class="eg-tag">' + esc(sourceLabel(r.source)) + '</span></td>' +
-        '<td>' + statusPill(r.status) + '</td>' +
+        '<td>' + statusPill(r.status) + manualSchedulingBadge(r) + '</td>' +
         '<td>' + esc(capitalize(r.priority)) + '</td>' +
         '<td class="eg-small eg-muted">' + fmtDate(r.last_activity_at) + '</td>' +
         '<td class="eg-small eg-muted">' + fmtDate(r.created_at) + '</td>' +
