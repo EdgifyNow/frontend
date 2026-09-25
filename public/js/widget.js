@@ -32,6 +32,7 @@
     leadFormError: null,
     appointmentResult: null,
     appointmentFormError: null,
+    smsConsent: null,
     conversationId: sessionStorage.getItem(CONV_KEY) || null
   };
 
@@ -260,6 +261,24 @@
       '</div>' + errorHtml + result + '</div>';
   }
 
+  // Unchecked-by-default consent to appointment texts. Shown only when the
+  // business has reminders on (GET /public/sms-consent), with the exact
+  // wording the server supplies; that same label text is what gets stored
+  // with the customer's answer.
+  function smsConsentHtml(){
+    if (!state.smsConsent || !state.smsConsent.enabled) return "";
+    return '<label class="wg-consent"><input id="wgApptSmsConsent" type="checkbox" />' +
+      '<span id="wgApptSmsConsentText">' + esc(state.smsConsent.wording) + '</span></label>';
+  }
+
+  function loadSmsConsent(){
+    if (state.smsConsent) return;
+    api("/api/v1/public/sms-consent").then(function(cfg){
+      state.smsConsent = cfg || { enabled: false };
+      if (state.activePanel === "appointment") render();
+    }).catch(function(){ state.smsConsent = { enabled: false }; });
+  }
+
   function appointmentPanelHtml(){
     var result = state.appointmentResult ? '<div class="wg-loading" style="color:#168a5b">Your appointment request was sent.</div>' : "";
     var errorHtml = state.appointmentFormError ? '<div class="wg-loading" style="color:#c24141">' + esc(state.appointmentFormError) + '</div>' : "";
@@ -268,6 +287,7 @@
       '<input id="wgApptEmail" type="email" placeholder="Email" required />' +
       '<input id="wgApptPhone" type="tel" placeholder="Phone, e.g. (555) 123-4567" required />' +
       '<input id="wgApptWhen" type="datetime-local" required />' +
+      smsConsentHtml() +
       '<div class="wg-panel-actions">' +
       '<button class="wg-panel-btn primary" id="wgApptSubmit">Request</button>' +
       '<button class="wg-panel-btn ghost" id="wgPanelCancel">Cancel</button>' +
@@ -305,6 +325,7 @@
     document.querySelectorAll("[data-panel]").forEach(function(el){
       el.addEventListener("click", function(){
         state.activePanel = el.getAttribute("data-panel");
+        if (state.activePanel === "appointment") loadSmsConsent();
         state.leadFormError = null;
         state.appointmentFormError = null;
         render();
@@ -386,8 +407,11 @@
       var lastName = parts.join(" ");
       var startAt = new Date(when);
       var endAt = new Date(startAt.getTime() + APPOINTMENT_DURATION_MINUTES * 60 * 1000);
+      var consentBox = document.getElementById("wgApptSmsConsent");
+      var consentText = document.getElementById("wgApptSmsConsentText");
+      var consentFields = consentBox ? { sms_consent: consentBox.checked, sms_consent_wording: consentText.textContent } : {};
       apptSubmit.disabled = true; apptSubmit.textContent = "Sending...";
-      api("/api/v1/public/appointments", { method: "POST", body: {
+      var body = {
         first_name: firstName || null,
         last_name: lastName || null,
         email: email,
@@ -395,7 +419,9 @@
         start_at: startAt.toISOString(),
         end_at: endAt.toISOString(),
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || null
-      }})
+      };
+      for (var f in consentFields) body[f] = consentFields[f];
+      api("/api/v1/public/appointments", { method: "POST", body: body })
         .then(function(){
           state.appointmentResult = true;
           render();

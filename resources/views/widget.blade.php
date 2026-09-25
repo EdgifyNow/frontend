@@ -48,6 +48,8 @@ html,body{margin:0;height:100%;font-family:Inter,ui-sans-serif,system-ui,-apple-
 .wg-panel{padding:12px;background:#fff;border-top:1px solid var(--wg-line)}
 .wg-panel h4{margin:0 0 8px;font-size:13px}
 .wg-panel input,.wg-panel select{width:100%;padding:8px 10px;border:1px solid var(--wg-line);border-radius:8px;font:inherit;font-size:12.5px;margin-bottom:8px}
+.wg-consent{display:flex;gap:8px;align-items:flex-start;font-size:11.5px;line-height:1.4;color:var(--wg-muted);margin:0 0 8px}
+.wg-consent input{width:auto;margin:2px 0 0;flex:0 0 auto}
 .wg-panel-actions{display:flex;gap:8px}
 .wg-panel-btn{flex:1;padding:8px;border-radius:8px;border:0;font-size:12.5px;font-weight:600;cursor:pointer}
 .wg-panel-btn.primary{background:var(--wg-primary);color:#fff}
