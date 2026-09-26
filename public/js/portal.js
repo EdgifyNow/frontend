@@ -60,6 +60,7 @@
     leadAppointments: null,
     contactDrawerId: null,
     widgetKey: undefined, // undefined = not fetched yet, null = fetched, none exists
+    gcalStatus: undefined, // undefined = not fetched yet, else {connected, account_email, needs_reconnect, message}
     widgetIdDraft: "",
     leadPage: 1,
     contactPage: 1,
@@ -425,6 +426,11 @@
   function ensureWidgetKey(){
     api("/api/v1/integrations/widget-key").then(function(d){ state.widgetKey = d; render(); }).catch(function(err){ showToast(err.message, true); });
   }
+  function ensureGoogleCalendarStatus(){
+    api("/api/v1/integrations/google-calendar/status").then(function(d){
+      if (setIfChanged("gcalStatus", d)) render();
+    }).catch(function(){ /* leave the button usable if status can't be read */ });
+  }
   function ensureAssistants(){
     api("/api/v1/assistants").then(function(d){
       var changed = setIfChanged("assistants", d);
@@ -481,7 +487,7 @@
     if (v === "assistant") ensureAssistants();
     if (v === "tenants") ensureTenants();
     if (v === "demo") { ensureAssistants(); ensureDocuments(); }
-    if (v === "integrations") ensureWidgetKey();
+    if (v === "integrations") { ensureWidgetKey(); ensureGoogleCalendarStatus(); }
     if (v === "voice") { loadChannelCaptures(CHANNEL_ACTIVITY.voice); startChannelAutoRefresh(CHANNEL_ACTIVITY.voice); }
     else if (v === "whatsapp") { loadWhatsappConnection(); loadChannelCaptures(CHANNEL_ACTIVITY.whatsapp); startChannelAutoRefresh(CHANNEL_ACTIVITY.whatsapp); }
     else stopChannelAutoRefresh();
@@ -973,7 +979,8 @@
     missing_fields: "No date or time was given",
     unparseable: "The requested time couldn't be understood",
     past_time: "The requested time has already passed",
-    slot_conflict: "The requested time is already taken"
+    slot_conflict: "The requested time is already taken",
+    outside_hours: "The requested time is outside business hours"
   };
   function manualSchedulingBadge(lead){
     if (!lead || !lead.needs_manual_scheduling) return "";
@@ -2793,6 +2800,22 @@
       '  });\n})();\n<\/script>';
   }
 
+  // The saved connection, read from the server, so it still shows after
+  // signing out and back in, and after coming back from Google's tab.
+  function gcalStatusHtml(){
+    var g = state.gcalStatus;
+    if (!g) return "";
+    if (g.connected) {
+      return '<div id="egGcalStatus" class="eg-row" style="margin-bottom:10px"><span class="eg-pill green">Connected</span>' +
+        '<span class="eg-small">' + (g.account_email ? 'Connected as <b>' + esc(g.account_email) + '</b>' : "Google Calendar is connected") + '</span></div>';
+    }
+    if (g.needs_reconnect) {
+      return '<div id="egGcalStatus" class="eg-row" style="margin-bottom:10px"><span class="eg-pill red">Needs reconnecting</span>' +
+        '<span class="eg-small">' + esc(g.message || "Google Calendar disconnected - Reconnect") + '</span></div>';
+    }
+    return '<div id="egGcalStatus" class="eg-row" style="margin-bottom:10px"><span class="eg-pill">Not connected</span></div>';
+  }
+
   function integrationsHtml(){
     var currentHtml;
     if (state.widgetKey === null) {
@@ -2826,8 +2849,9 @@
       '</div>' +
       '<div class="eg-card" style="margin-top:16px">' +
       '<h3>Google Calendar</h3>' +
+      gcalStatusHtml() +
       '<p class="eg-small eg-muted" style="margin-top:-8px">Connect your Google Calendar so appointments booked through your AI assistant are added automatically. Opens Google\'s consent screen in a new tab - grant access there, then close that tab and come back here.</p>' +
-      '<button class="eg-btn" id="egConnectGoogleCalendar">Connect Google Calendar</button>' +
+      '<button class="eg-btn" id="egConnectGoogleCalendar">' + (state.gcalStatus && (state.gcalStatus.connected || state.gcalStatus.needs_reconnect) ? "Reconnect Google Calendar" : "Connect Google Calendar") + '</button>' +
       '</div>';
   }
 
@@ -2865,18 +2889,24 @@
         .catch(function(err){ showToast(err.message, true); revokeBtn.disabled = false; revokeBtn.textContent = "Revoke"; });
     });
 
-    // Backend currently only exposes the authorize-URL step (no status or
-    // disconnect endpoint yet), so this button can't show a "Connected"
-    // state - it just opens Google's consent screen each time it's clicked.
+    // Opens Google's consent screen; the connected state comes from the
+    // server's saved status, re-read when the owner returns to this tab.
     var gcalBtn = document.getElementById("egConnectGoogleCalendar");
     if (gcalBtn) gcalBtn.addEventListener("click", function(){
+      var label = gcalBtn.textContent;
       gcalBtn.disabled = true; gcalBtn.textContent = "Opening Google...";
       api("/api/v1/integrations/google-calendar/authorize")
         .then(function(d){ window.open(d.authorize_url, "_blank", "noopener"); })
         .catch(function(err){ showToast(err.message, true); })
-        .then(function(){ gcalBtn.disabled = false; gcalBtn.textContent = "Connect Google Calendar"; });
+        .then(function(){ gcalBtn.disabled = false; gcalBtn.textContent = label; });
     });
   }
+
+  // Coming back from Google's consent tab: re-read the saved connection so
+  // the Integrations page shows Connected without a manual refresh.
+  window.addEventListener("focus", function(){
+    if (state.view === "integrations" && state.token) ensureGoogleCalendarStatus();
+  });
 
   init();
 })();
