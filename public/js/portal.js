@@ -553,7 +553,8 @@
       { id: "leads", label: "Leads & Contacts", icon: "contacts" },
       { id: "knowledge", label: "Knowledge", icon: "book" },
       { id: "assistant", label: "AI Assistant", icon: "spark" },
-      { id: "integrations", label: "Integrations", icon: "plug" }
+      { id: "integrations", label: "Integrations", icon: "plug" },
+      { id: "account", label: "Account", icon: "home" }
     ];
     // Voice Activity is a real-time operational dashboard, only meaningful
     // (and only shown) once this tenant's voice channel is enabled - see
@@ -632,6 +633,7 @@
     if (state.view === "tenantDetail") return state.tenantDetail ? (state.tenantDetail.name || state.tenantDetail.slug) : "Client details";
     if (state.view === "demo") return "Instant Demo";
     if (state.view === "integrations") return "Integrations";
+    if (state.view === "account") return "Account";
     if (state.view === "voice") return "Voice Activity";
     if (state.view === "whatsapp") return "WhatsApp Activity";
     return "";
@@ -645,6 +647,7 @@
     if (state.view === "tenantDetail") return "Client account, billing and usage.";
     if (state.view === "demo") return "Upload a document and get a live AI answer, right now.";
     if (state.view === "integrations") return "Generate a widget key to embed your assistant on your website.";
+    if (state.view === "account") return "Your business name and contact details, as customers see them.";
     if (state.view === "voice") return "Live calls, orders, and appointments captured by your voice assistant.";
     if (state.view === "whatsapp") return "Live orders, appointments, and leads captured over WhatsApp.";
     return "";
@@ -661,6 +664,7 @@
     if (state.view === "tenantDetail") { el.innerHTML = tenantDetailHtml(); bindTenantDetail(); return; }
     if (state.view === "demo") { el.innerHTML = demoHtml(); bindDemo(); return; }
     if (state.view === "integrations") { el.innerHTML = integrationsHtml(); bindIntegrations(); return; }
+    if (state.view === "account") { el.innerHTML = accountHtml(); bindAccount(); return; }
     if (state.view === "voice") { el.innerHTML = voiceHtml(); bindVoice(); return; }
     if (state.view === "whatsapp") { el.innerHTML = whatsappHtml(); bindWhatsapp(); return; }
   }
@@ -1736,17 +1740,25 @@
     if (rows === null) return '<div class="eg-card" style="margin-bottom:14px"><div class="eg-small eg-muted">Loading SMS activity...</div></div>';
 
     var KIND_LABEL = { sms_confirmation: "Confirmation", sms_standard: "Standard" };
-    var STATUS_COLOR = { sent: "#15803d", failed: "#b91c1c", queued: "#6b7280" };
+    var STATUS_COLOR = { sent: "#15803d", delivered: "#15803d", undelivered: "#b91c1c", failed: "#b91c1c", queued: "#6b7280" };
+    // "sent" only means Twilio accepted the text; once Twilio reports back,
+    // show what it says happened on the phone instead.
+    function smsShownStatus(r){
+      if (r.delivery_status === "delivered") return "delivered";
+      if (r.delivery_status === "undelivered" || r.delivery_status === "failed") return r.delivery_status + (r.delivery_error_code ? " (" + r.delivery_error_code + ")" : "");
+      if (r.status === "sent") return "sent, awaiting delivery report";
+      return r.status;
+    }
     var body = rows.length === 0
       ? '<div class="eg-small eg-muted">No SMS reminders sent yet.</div>'
       : rows.map(function(r){
           var when = r.appointment_start_at ? fmtDate(r.appointment_start_at) : "-";
           var who = (r.contact_name || "Unknown") + (r.contact_phone ? " (" + r.contact_phone + ")" : "");
-          var statusColor = STATUS_COLOR[r.status] || "#374151";
+          var statusColor = STATUS_COLOR[r.delivery_status] || STATUS_COLOR[r.status] || "#374151";
           return '<div class="eg-row" style="gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px solid #eee">' +
             '<div style="flex:1"><b>' + esc(who) + '</b> <span class="eg-small eg-muted">' + esc(KIND_LABEL[r.kind] || r.kind) + ' for appointment at ' + esc(when) + '</span>' +
             (r.failure_reason ? '<div class="eg-small" style="color:#b91c1c">' + esc(r.failure_reason) + '</div>' : '') + '</div>' +
-            '<span class="eg-small" style="color:' + statusColor + '">' + esc(r.status) + '</span>' +
+            '<span class="eg-small" style="color:' + statusColor + '">' + esc(smsShownStatus(r)) + '</span>' +
             '</div>';
         }).join("");
 
@@ -2798,6 +2810,40 @@
       '    f.style.width = e.data.open ? PANEL_W : BUBBLE;\n' +
       '    f.style.height = e.data.open ? PANEL_H : BUBBLE;\n' +
       '  });\n})();\n<\/script>';
+  }
+
+  // ---- Account: the owner's own business name and contact details ----
+  // Business hours and timezone are set with the Voice settings; this is the
+  // name customers see in texts and emails and how to reach the business.
+  function accountHtml(){
+    var t = state.tenantSelf;
+    if (!t) return '<div class="eg-card"><div class="eg-empty">Loading...</div></div>';
+    return '<div class="eg-card" id="egAccountCard">' +
+      '<h3>Business details</h3>' +
+      '<p class="eg-small eg-muted" style="margin-top:-8px">The business name appears in the texts and emails your customers receive.</p>' +
+      '<div class="eg-form-row"><label>Business name</label><input class="eg-input" id="egAcctName" value="' + esc(t.name || "") + '" /></div>' +
+      '<div class="eg-form-row"><label>Contact name</label><input class="eg-input" id="egAcctContactName" value="' + esc(t.contact_name || "") + '" /></div>' +
+      '<div class="eg-form-row"><label>Contact phone</label><input class="eg-input" id="egAcctContactPhone" placeholder="(555) 123-4567" value="' + esc(t.contact_phone || "") + '" /></div>' +
+      '<div class="eg-form-row"><label>Website</label><input class="eg-input" id="egAcctWebsite" placeholder="https://" value="' + esc(t.website || "") + '" /></div>' +
+      '<button class="eg-btn" id="egAcctSave">Save</button>' +
+      '</div>';
+  }
+
+  function bindAccount(){
+    var save = document.getElementById("egAcctSave");
+    if (!save) return;
+    save.addEventListener("click", function(){
+      var body = {
+        name: document.getElementById("egAcctName").value,
+        contact_name: document.getElementById("egAcctContactName").value,
+        contact_phone: document.getElementById("egAcctContactPhone").value,
+        website: document.getElementById("egAcctWebsite").value
+      };
+      save.disabled = true; save.textContent = "Saving...";
+      api("/api/v1/tenants/me", { method: "PATCH", body: body })
+        .then(function(d){ state.tenantSelf = d; showToast("Saved"); })
+        .catch(function(err){ showToast(err.message, true); save.disabled = false; save.textContent = "Save"; });
+    });
   }
 
   // The saved connection, read from the server, so it still shows after
