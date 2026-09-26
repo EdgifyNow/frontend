@@ -1400,59 +1400,96 @@
       : allCaptures;
     if (!captures.length) return filters + '<div class="eg-card"><div class="eg-small eg-muted">' + esc(cfg.emptyMessage) + '</div></div>';
 
-    var tiles = captures.map(function(v){
-      var typeColor = CHANNEL_TYPE_COLOR[v.capture_type] || "gray";
-      var badgeColor = CHANNEL_STATUS_BADGE[v.status] || "navy";
-      var isInquiry = v.capture_type === "general_inquiry";
-      var nextStatus = CHANNEL_NEXT_STATUS[v.status];
-      var isDone = v.status === "completed" || v.status === "cancelled";
+    // Split into the three purpose-built sections instead of one
+    // undifferentiated grid: orders move through a status workflow so they
+    // group by status, appointments and general_inquiry/lead don't have a
+    // meaningful multi-stage workflow so they just list newest first. Each
+    // capture is still the exact same tile markup/actions as before -
+    // renderCaptureTile() below is that unchanged per-tile rendering,
+    // factored out so it can be called once per section instead of once
+    // for a single flat list.
+    var byNewest = function(a, b){ return new Date(b.created_at) - new Date(a.created_at); };
+    var orders = captures.filter(function(v){ return v.capture_type === "order"; });
+    var appts = captures.filter(function(v){ return v.capture_type === "appointment"; }).sort(byNewest);
+    var inquiries = captures.filter(function(v){ return v.capture_type === "general_inquiry" || v.capture_type === "lead"; }).sort(byNewest);
 
-      var actionsHtml = "";
-      if (isInquiry) {
-        if (!isDone) {
-          actionsHtml = '<div class="eg-vtile-actions">' +
-            '<button class="eg-btn small ghost" data-channel-drawer="' + cfg.key + '" data-channel-drawer-id="' + esc(v.id) + '">View Details</button>' +
-            '<button class="eg-btn small ghost" data-channel-action="' + cfg.key + '" data-channel-action-id="' + esc(v.id) + '" data-channel-action-status="completed">Dismiss</button>' +
-            '</div>';
-        }
-      } else if (!isDone) {
-        actionsHtml = '<div class="eg-vtile-actions">' +
-          (nextStatus
-            ? '<button class="eg-btn small" data-channel-action="' + cfg.key + '" data-channel-action-id="' + esc(v.id) + '" data-channel-action-status="' + nextStatus + '">' + esc(CHANNEL_NEXT_LABEL[v.status]) + '</button>'
-            : '') +
-          '<button class="eg-btn small ghost" data-channel-drawer="' + cfg.key + '" data-channel-drawer-id="' + esc(v.id) + '">View</button>' +
-          '<button class="eg-btn small ghost" data-channel-action="' + cfg.key + '" data-channel-action-id="' + esc(v.id) + '" data-channel-action-status="cancelled">Cancel</button>' +
-          '</div>';
-      }
-
-      var headline = channelDetailsLine(v.details);
-      var descHtml = headline
-        ? '<div class="eg-vtile-desc">' + esc(v.summary) + '</div>'
-        : '<div class="eg-vtile-headline">' + esc(v.summary) + '</div>';
-
-      // No name on file: show the phone number itself as the heading
-      // instead of the word "Unknown", and skip the redundant phone line
-      // underneath since it's already the heading.
-      var hasName = !!v.contact.name;
-      var heading = hasName ? v.contact.name : (v.contact.phone || "Unknown");
-
-      return '<div class="eg-vtile ' + typeColor + '" data-channel-drawer="' + cfg.key + '" data-channel-drawer-id="' + esc(v.id) + '">' +
-        '<div class="eg-vtile-top">' +
-        '<div><div class="eg-vtile-name">' + esc(heading) + (v.contact.is_test ? ' <span class="eg-tag" style="background:#f7d774">TEST</span>' : '') + '</div>' +
-        (hasName ? '<div class="eg-vtile-phone">' + esc(v.contact.phone || "-") + '</div>' : '') + '</div>' +
-        '<span class="eg-pill ' + badgeColor + '">' + channelStatusLabel(v.status) + '</span>' +
-        '</div>' +
-        '<div class="eg-vtile-typebadge ' + typeColor + '">' + CHANNEL_TYPE_ICON[v.capture_type] + ' ' + esc(channelTypeLabel(v.capture_type)) + '</div>' +
-        headline +
-        descHtml +
-        '<div class="eg-vtile-meta"><span>' + fmtDate(v.created_at) + '</span></div>' +
-        actionsHtml +
-        '</div>';
+    var orderGroupOrder = ["new", "in_progress", "ready", "completed", "cancelled"];
+    var ordersHtml = orderGroupOrder.map(function(st){
+      var group = orders.filter(function(o){ return o.status === st; }).sort(byNewest);
+      if (!group.length) return "";
+      return '<div style="margin-bottom:12px"><div class="eg-small" style="font-weight:700;margin-bottom:6px">' + channelStatusLabel(st) + ' <span class="eg-muted" style="font-weight:500">(' + group.length + ')</span></div>' +
+        '<div class="eg-tilegrid">' + group.map(function(v){ return renderCaptureTile(v, cfg); }).join("") + '</div></div>';
     }).join("");
 
-    return filters + '<div class="eg-tilegrid">' + tiles + '</div>' +
+    var sectionHtml = function(title, subtitle, count, bodyHtml){
+      return '<div class="eg-card" style="margin-bottom:14px">' +
+        '<div class="eg-cardhead"><h3 style="margin:0">' + esc(title) + ' <span class="eg-small eg-muted" style="font-weight:500">(' + count + ')</span></h3>' +
+        '<span class="eg-small eg-muted" style="margin-left:auto">' + esc(subtitle) + '</span></div>' +
+        bodyHtml + '</div>';
+    };
+
+    var sections = "";
+    if (orders.length) sections += sectionHtml("Orders", "New → In Progress → Ready", orders.length, ordersHtml);
+    if (appts.length) sections += sectionHtml("Appointments", "Newest first", appts.length, '<div class="eg-tilegrid">' + appts.map(function(v){ return renderCaptureTile(v, cfg); }).join("") + '</div>');
+    if (inquiries.length) sections += sectionHtml("Inquiries & Leads", "Newest first", inquiries.length, '<div class="eg-tilegrid">' + inquiries.map(function(v){ return renderCaptureTile(v, cfg); }).join("") + '</div>');
+
+    return filters + sections +
       '<div class="eg-small eg-muted" style="margin-top:14px">Showing ' + captures.length + ' ' + (captures.length === 1 ? "activity" : "activities") +
       ' &middot; Each call or message is a separate activity, even from the same phone number</div>';
+  }
+
+  // One capture's tile - unchanged from the original flat-grid rendering,
+  // just factored out so channelActivityHtml() can call it once per
+  // section (Orders/Appointments/Inquiries & Leads) instead of once for a
+  // single undifferentiated list.
+  function renderCaptureTile(v, cfg){
+    var typeColor = CHANNEL_TYPE_COLOR[v.capture_type] || "gray";
+    var badgeColor = CHANNEL_STATUS_BADGE[v.status] || "navy";
+    var isInquiry = v.capture_type === "general_inquiry";
+    var nextStatus = CHANNEL_NEXT_STATUS[v.status];
+    var isDone = v.status === "completed" || v.status === "cancelled";
+
+    var actionsHtml = "";
+    if (isInquiry) {
+      if (!isDone) {
+        actionsHtml = '<div class="eg-vtile-actions">' +
+          '<button class="eg-btn small ghost" data-channel-drawer="' + cfg.key + '" data-channel-drawer-id="' + esc(v.id) + '">View Details</button>' +
+          '<button class="eg-btn small ghost" data-channel-action="' + cfg.key + '" data-channel-action-id="' + esc(v.id) + '" data-channel-action-status="completed">Dismiss</button>' +
+          '</div>';
+      }
+    } else if (!isDone) {
+      actionsHtml = '<div class="eg-vtile-actions">' +
+        (nextStatus
+          ? '<button class="eg-btn small" data-channel-action="' + cfg.key + '" data-channel-action-id="' + esc(v.id) + '" data-channel-action-status="' + nextStatus + '">' + esc(CHANNEL_NEXT_LABEL[v.status]) + '</button>'
+          : '') +
+        '<button class="eg-btn small ghost" data-channel-drawer="' + cfg.key + '" data-channel-drawer-id="' + esc(v.id) + '">View</button>' +
+        '<button class="eg-btn small ghost" data-channel-action="' + cfg.key + '" data-channel-action-id="' + esc(v.id) + '" data-channel-action-status="cancelled">Cancel</button>' +
+        '</div>';
+    }
+
+    var headline = channelDetailsLine(v.details);
+    var descHtml = headline
+      ? '<div class="eg-vtile-desc">' + esc(v.summary) + '</div>'
+      : '<div class="eg-vtile-headline">' + esc(v.summary) + '</div>';
+
+    // No name on file: show the phone number itself as the heading
+    // instead of the word "Unknown", and skip the redundant phone line
+    // underneath since it's already the heading.
+    var hasName = !!v.contact.name;
+    var heading = hasName ? v.contact.name : (v.contact.phone || "Unknown");
+
+    return '<div class="eg-vtile ' + typeColor + '" data-channel-drawer="' + cfg.key + '" data-channel-drawer-id="' + esc(v.id) + '">' +
+      '<div class="eg-vtile-top">' +
+      '<div><div class="eg-vtile-name">' + esc(heading) + (v.contact.is_test ? ' <span class="eg-tag" style="background:#f7d774">TEST</span>' : '') + '</div>' +
+      (hasName ? '<div class="eg-vtile-phone">' + esc(v.contact.phone || "-") + '</div>' : '') + '</div>' +
+      '<span class="eg-pill ' + badgeColor + '">' + channelStatusLabel(v.status) + '</span>' +
+      '</div>' +
+      '<div class="eg-vtile-typebadge ' + typeColor + '">' + CHANNEL_TYPE_ICON[v.capture_type] + ' ' + esc(channelTypeLabel(v.capture_type)) + '</div>' +
+      headline +
+      descHtml +
+      '<div class="eg-vtile-meta"><span>' + fmtDate(v.created_at) + '</span></div>' +
+      actionsHtml +
+      '</div>';
   }
 
   function bindChannelActivity(cfg){
