@@ -60,7 +60,7 @@
     leadAppointments: null,
     contactDrawerId: null,
     widgetKey: undefined, // undefined = not fetched yet, null = fetched, none exists
-    gcalStatus: undefined, // undefined = not fetched yet, else {connected, account_email, needs_reconnect, message}
+    integrationConnections: null, // GET /integrations/connections - see googleCalendarConnection()
     widgetIdDraft: "",
     leadPage: 1,
     contactPage: 1,
@@ -426,10 +426,29 @@
   function ensureWidgetKey(){
     api("/api/v1/integrations/widget-key").then(function(d){ state.widgetKey = d; render(); }).catch(function(err){ showToast(err.message, true); });
   }
+  // There is no GET /integrations/google-calendar/status endpoint - it was
+  // never a real route (confirmed against the current openapi.json), so a
+  // prior version of this call always failed silently and the button never
+  // reflected a real connection. The actual source of truth is the generic
+  // connections list: find the one entry with integration_type "booking"
+  // and provider "google_calendar" and branch on its own status field.
   function ensureGoogleCalendarStatus(){
-    api("/api/v1/integrations/google-calendar/status").then(function(d){
-      if (setIfChanged("gcalStatus", d)) render();
-    }).catch(function(){ /* leave the button usable if status can't be read */ });
+    api("/api/v1/integrations/connections").then(function(d){
+      if (setIfChanged("integrationConnections", d)) render();
+    }).catch(function(){ /* leave the button usable if the list can't be read */ });
+  }
+  function googleCalendarConnection(){
+    return (state.integrationConnections || []).filter(function(c){
+      return c.integration_type === "booking" && c.provider === "google_calendar";
+    })[0] || null;
+  }
+  function gcalConnected(){
+    var c = googleCalendarConnection();
+    return !!(c && c.has_credential && c.status === "active");
+  }
+  function gcalNeedsReconnect(){
+    var c = googleCalendarConnection();
+    return !!(c && c.has_credential && c.status === "error");
   }
   function ensureAssistants(){
     api("/api/v1/assistants").then(function(d){
@@ -2848,18 +2867,23 @@
 
   // The saved connection, read from the server, so it still shows after
   // signing out and back in, and after coming back from Google's tab.
+  // pending/disabled are treated as "not connected" for now - there's no
+  // specific flow for those states yet.
   function gcalStatusHtml(){
-    var g = state.gcalStatus;
-    if (!g) return "";
-    if (g.connected) {
-      return '<div id="egGcalStatus" class="eg-row" style="margin-bottom:10px"><span class="eg-pill green">Connected</span>' +
-        '<span class="eg-small">' + (g.account_email ? 'Connected as <b>' + esc(g.account_email) + '</b>' : "Google Calendar is connected") + '</span></div>';
+    var c = googleCalendarConnection();
+    if (!c || !c.has_credential) return "";
+    if (c.status === "active") {
+      return '<div id="egGcalStatus" class="eg-row" style="margin-bottom:10px"><span class="eg-pill green">&#10003; Connected</span>' +
+        '<span class="eg-small">' + (c.display_name ? 'Connected as <b>' + esc(c.display_name) + '</b>' : "Google Calendar is connected") + '</span></div>';
     }
-    if (g.needs_reconnect) {
+    if (c.status === "error") {
+      // Set automatically by the backend's booking sync job when the
+      // refresh token expires or gets revoked - a real "was connected, now
+      // broken" state, worth surfacing differently than "never connected".
       return '<div id="egGcalStatus" class="eg-row" style="margin-bottom:10px"><span class="eg-pill red">Needs reconnecting</span>' +
-        '<span class="eg-small">' + esc(g.message || "Google Calendar disconnected - Reconnect") + '</span></div>';
+        '<span class="eg-small">Google stopped accepting our access to this calendar - reconnect to restore it.</span></div>';
     }
-    return '<div id="egGcalStatus" class="eg-row" style="margin-bottom:10px"><span class="eg-pill">Not connected</span></div>';
+    return "";
   }
 
   function integrationsHtml(){
@@ -2897,7 +2921,9 @@
       '<h3>Google Calendar</h3>' +
       gcalStatusHtml() +
       '<p class="eg-small eg-muted" style="margin-top:-8px">Connect your Google Calendar so appointments booked through your AI assistant are added automatically. Opens Google\'s consent screen in a new tab - grant access there, then close that tab and come back here.</p>' +
-      '<button class="eg-btn" id="egConnectGoogleCalendar">' + (state.gcalStatus && (state.gcalStatus.connected || state.gcalStatus.needs_reconnect) ? "Reconnect Google Calendar" : "Connect Google Calendar") + '</button>' +
+      (gcalConnected()
+        ? '<button class="eg-btn danger" id="egDisconnectGoogleCalendar">Disconnect</button>'
+        : '<button class="eg-btn" id="egConnectGoogleCalendar">' + (gcalNeedsReconnect() ? "Reconnect Google Calendar" : "Connect Google Calendar") + '</button>') +
       '</div>';
   }
 
@@ -2936,7 +2962,7 @@
     });
 
     // Opens Google's consent screen; the connected state comes from the
-    // server's saved status, re-read when the owner returns to this tab.
+    // server's saved connection, re-read when the owner returns to this tab.
     var gcalBtn = document.getElementById("egConnectGoogleCalendar");
     if (gcalBtn) gcalBtn.addEventListener("click", function(){
       var label = gcalBtn.textContent;
@@ -2945,6 +2971,20 @@
         .then(function(d){ window.open(d.authorize_url, "_blank", "noopener"); })
         .catch(function(err){ showToast(err.message, true); })
         .then(function(){ gcalBtn.disabled = false; gcalBtn.textContent = label; });
+    });
+
+    var gcalDisconnectBtn = document.getElementById("egDisconnectGoogleCalendar");
+    if (gcalDisconnectBtn) gcalDisconnectBtn.addEventListener("click", function(){
+      var c = googleCalendarConnection();
+      if (!c) return;
+      if (!window.confirm("Disconnect Google Calendar? Appointments booked through your AI assistant will stop syncing until you reconnect.")) return;
+      gcalDisconnectBtn.disabled = true; gcalDisconnectBtn.textContent = "Disconnecting...";
+      api("/api/v1/integrations/connections/" + c.id, { method: "DELETE" })
+        .then(function(){
+          showToast("Google Calendar disconnected");
+          ensureGoogleCalendarStatus();
+        })
+        .catch(function(err){ showToast(err.message, true); gcalDisconnectBtn.disabled = false; gcalDisconnectBtn.textContent = "Disconnect"; });
     });
   }
 
