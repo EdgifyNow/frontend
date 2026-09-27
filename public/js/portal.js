@@ -59,6 +59,14 @@
     leadDrawerId: null,
     leadAppointments: null,
     contactDrawerId: null,
+    // There's no global GET /crm/appointments - only per-lead - so the
+    // Appointments tab loads every lead's appointments in parallel and
+    // merges them client side. null = not fetched yet.
+    allAppointments: null,
+    appointmentSearch: "",
+    appointmentStatusFilter: "all",
+    appointmentPage: 1,
+    appointmentDrawerId: null,
     widgetKey: undefined, // undefined = not fetched yet, null = fetched, none exists
     integrationConnections: null, // GET /integrations/connections - see googleCalendarConnection()
     widgetIdDraft: "",
@@ -423,6 +431,34 @@
   function ensureDocuments(){
     api("/api/v1/documents").then(function(d){ if (setIfChanged("documents", d)) render(); }).catch(function(err){ showToast(err.message, true); });
   }
+  // No GET /crm/appointments exists - only GET /crm/leads/{id}/appointments,
+  // one lead at a time. Loads leads first (if needed), then fetches every
+  // lead's appointments in parallel and flattens the results, each tagged
+  // with its lead's contact name so the table can show who it's for.
+  // Fine at today's lead volumes; if this tenant's lead list grows into the
+  // hundreds this should move to a real backend list endpoint instead.
+  function ensureAllAppointments(){
+    var leadsP = state.leads ? Promise.resolve(state.leads) : api("/api/v1/crm/leads").then(function(d){ state.leads = d; return d; });
+    var contactsP = state.contacts ? Promise.resolve(state.contacts) : api("/api/v1/crm/contacts").then(function(d){ state.contacts = d; return d; });
+    Promise.all([leadsP, contactsP]).then(function(results){
+      var leads = results[0];
+      var cmap = contactMapFromState();
+      return Promise.all((leads || []).map(function(l){
+        return api("/api/v1/crm/leads/" + l.id + "/appointments").then(function(appts){
+          return appts.map(function(a){
+            var copy = {};
+            for (var k in a) copy[k] = a[k];
+            copy.lead = l;
+            copy.contact = cmap[l.contact_id] || null;
+            return copy;
+          });
+        }).catch(function(){ return []; });
+      })).then(function(lists){
+        var all = [].concat.apply([], lists).sort(function(x, y){ return new Date(x.start_at) - new Date(y.start_at); });
+        if (setIfChanged("allAppointments", all)) render();
+      });
+    }).catch(function(err){ showToast(err.message, true); });
+  }
   function ensureWidgetKey(){
     api("/api/v1/integrations/widget-key").then(function(d){ state.widgetKey = d; render(); }).catch(function(err){ showToast(err.message, true); });
   }
@@ -627,7 +663,7 @@
       '</div>' +
       '<div id="egContent"></div>' +
       '</main>' +
-      '</div>' + toastHtml + leadDrawerHtml() + contactDrawerHtml() + voiceDrawerHtml() + whatsappDrawerHtml();
+      '</div>' + toastHtml + leadDrawerHtml() + contactDrawerHtml() + appointmentDrawerHtml() + voiceDrawerHtml() + whatsappDrawerHtml();
 
     document.querySelectorAll("[data-nav]").forEach(function(el){
       el.addEventListener("click", function(){
@@ -638,6 +674,7 @@
     });
     bindDrawer();
     bindContactDrawer();
+    bindAppointmentDrawer();
     bindAllChannelDrawers();
 
     renderContent();
@@ -1122,12 +1159,143 @@
       '</div>';
   }
 
+  var APPT_STATUS_OPTIONS = ["scheduled", "confirmed", "cancelled", "completed", "no_show"];
+  function appointmentStatusLabel(s){ return capitalize(String(s || "").replace("_", " ")); }
+  function appointmentStatusPill(s){
+    var cls = "eg-pill";
+    if (s === "confirmed" || s === "completed") cls += " green";
+    else if (s === "scheduled") cls += " amber";
+    else if (s === "cancelled" || s === "no_show") cls += " red";
+    return '<span class="' + cls + '">' + esc(appointmentStatusLabel(s)) + '</span>';
+  }
+  function filteredAppointments(){
+    var q = (state.appointmentSearch || "").toLowerCase().trim();
+    return (state.allAppointments || []).filter(function(a){
+      if (state.appointmentStatusFilter !== "all" && a.status !== state.appointmentStatusFilter) return false;
+      if (!q) return true;
+      var text = [contactName(a.contact), a.contact && a.contact.email, a.contact && a.contact.phone, a.location].filter(Boolean).join(" ").toLowerCase();
+      return text.indexOf(q) !== -1;
+    });
+  }
+  function appointmentsTabHtml(){
+    if (!state.allAppointments) return '<div class="eg-card"><div class="eg-empty">Loading appointments...</div></div>';
+    var filtered = filteredAppointments();
+    var page = paginate(filtered, state.appointmentPage);
+    var rows = page.pageItems.map(function(a){
+      // fmtDate/fmtTime never touch user input, and the "-" separator is
+      // plain text, not markup - safe to drop straight into the row
+      // without esc() (which would otherwise double-escape the &ndash;
+      // entity used elsewhere and print it literally instead of a dash).
+      var when = fmtDate(a.start_at) + (a.end_at ? " – " + fmtTime(a.end_at) : "");
+      var where = a.meeting_url ? "Video call" : (a.location || "-");
+      return '<tr class="eg-clickrow" style="cursor:pointer" data-appointment-drawer="' + esc(a.id) + '">' +
+        '<td><b>' + esc(contactName(a.contact)) + '</b></td>' +
+        '<td>' + when + '</td>' +
+        '<td>' + appointmentStatusPill(a.status) + '</td>' +
+        '<td>' + esc(where) + '</td>' +
+        '<td class="eg-small eg-muted">' + fmtDate(a.created_at) + '</td>' +
+        '<td><button class="eg-btn ghost" style="padding:4px 10px">Edit</button></td></tr>';
+    }).join("");
+    return '<div class="eg-card">' +
+      '<div class="eg-toolbar">' +
+      '<input id="egAppointmentSearch" placeholder="Search by contact, email, phone..." value="' + esc(state.appointmentSearch) + '" />' +
+      '<select id="egAppointmentStatusFilter">' + selOpts(["all"].concat(APPT_STATUS_OPTIONS).map(function(s){ return { value: s, label: s === "all" ? "All Statuses" : appointmentStatusLabel(s) }; }), state.appointmentStatusFilter) + '</select>' +
+      '</div>' +
+      (rows ? '<table class="eg-table"><thead><tr><th>Contact</th><th>When</th><th>Status</th><th>Location</th><th>Booked</th><th>Actions</th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div class="eg-empty">' + (state.appointmentSearch ? "No matching appointments." : "No appointments yet.") + '</div>') +
+      pagerHtml("egAppointment", page, "appointments") +
+      '</div>';
+  }
+  function appointmentDrawerHtml(){
+    if (!state.appointmentDrawerId) return "";
+    var a = (state.allAppointments || []).filter(function(x){ return x.id === state.appointmentDrawerId; })[0];
+    if (!a) return "";
+    // start_at/end_at come back as UTC ISO strings; a datetime-local input
+    // needs local wall-clock time with no trailing Z, hence the slice.
+    function toLocalInputValue(iso){
+      if (!iso) return "";
+      var d = new Date(iso);
+      d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+      return d.toISOString().slice(0, 16);
+    }
+    var statusSelect = '<select class="eg-select" id="egApptDrawerStatus">' + APPT_STATUS_OPTIONS.map(function(s){
+      return '<option value="' + s + '"' + (s === a.status ? " selected" : "") + '>' + appointmentStatusLabel(s) + '</option>';
+    }).join("") + '</select>';
+    return '<div class="eg-drawer-backdrop open" id="egApptDrawerBackdrop"></div>' +
+      '<aside class="eg-drawer open">' +
+      '<button class="eg-drawer-close" id="egApptDrawerClose" aria-label="Close">&times;</button>' +
+      '<h2>' + esc(contactName(a.contact)) + '</h2>' +
+      '<div class="eg-drawer-sub">Appointment</div>' +
+      '<h4>Contact</h4>' +
+      '<div class="eg-kv"><span>Email</span><b>' + esc((a.contact && a.contact.email) || "-") + '</b></div>' +
+      '<div class="eg-kv"><span>Phone</span><b>' + esc((a.contact && a.contact.phone) || "-") + '</b></div>' +
+      '<h4>Details</h4>' +
+      '<div class="eg-form-row"><label>Start</label><input class="eg-input" type="datetime-local" id="egApptDrawerStart" value="' + esc(toLocalInputValue(a.start_at)) + '" /></div>' +
+      '<div class="eg-form-row"><label>End <span class="eg-small eg-muted">(optional)</span></label><input class="eg-input" type="datetime-local" id="egApptDrawerEnd" value="' + esc(toLocalInputValue(a.end_at)) + '" /></div>' +
+      '<div class="eg-form-row"><label>Meeting URL <span class="eg-small eg-muted">(optional)</span></label><input class="eg-input" id="egApptDrawerMeetingUrl" value="' + esc(a.meeting_url || "") + '" placeholder="https://..." /></div>' +
+      '<div class="eg-form-row"><label>Notes</label><textarea class="eg-textarea" id="egApptDrawerNotes" style="min-height:70px">' + esc(a.notes || "") + '</textarea></div>' +
+      '<div class="eg-form-row"><label>Status</label>' + statusSelect + '</div>' +
+      '<button class="eg-btn" id="egApptDrawerSave">Save Changes</button>' +
+      '</aside>';
+  }
+  function bindAppointmentDrawer(){
+    var backdrop = document.getElementById("egApptDrawerBackdrop");
+    if (backdrop) backdrop.addEventListener("click", function(){ state.appointmentDrawerId = null; render(); });
+    var closeBtn = document.getElementById("egApptDrawerClose");
+    if (closeBtn) closeBtn.addEventListener("click", function(){ state.appointmentDrawerId = null; render(); });
+    var saveBtn = document.getElementById("egApptDrawerSave");
+    if (saveBtn) saveBtn.addEventListener("click", function(){
+      var id = state.appointmentDrawerId;
+      var original = (state.allAppointments || []).filter(function(a){ return a.id === id; })[0] || {};
+      var startVal = document.getElementById("egApptDrawerStart").value;
+      var endVal = document.getElementById("egApptDrawerEnd").value;
+      // datetime-local has no timezone of its own - new Date() on it is
+      // parsed in the browser's local zone, and toISOString() converts
+      // that to UTC for the API, matching what start_at/end_at came in as.
+      var newStartAt = startVal ? new Date(startVal).toISOString() : null;
+      var newEndAt = endVal ? new Date(endVal).toISOString() : null;
+      var newMeetingUrl = document.getElementById("egApptDrawerMeetingUrl").value.trim() || null;
+      var newNotes = document.getElementById("egApptDrawerNotes").value.trim() || null;
+      var newStatus = document.getElementById("egApptDrawerStatus").value;
+      // Only send fields that actually changed. Confirmed against the live
+      // API: PATCHing status together with start_at/end_at in the same
+      // request silently ignores the status change on a calendar-synced
+      // appointment (200 OK, but the response echoes the old status back) -
+      // sending status alone updates it correctly. Since the common edit
+      // here is "just change the status", this sidesteps that bug for that
+      // case entirely instead of tripping it on every save. Flagged to the
+      // backend separately - this is a workaround, not a real fix.
+      var body = {};
+      if (newStatus !== original.status) body.status = newStatus;
+      if (newStartAt !== (original.start_at ? new Date(original.start_at).toISOString() : null)) body.start_at = newStartAt;
+      if (newEndAt !== (original.end_at ? new Date(original.end_at).toISOString() : null)) body.end_at = newEndAt;
+      if (newMeetingUrl !== (original.meeting_url || null)) body.meeting_url = newMeetingUrl;
+      if (newNotes !== (original.notes || null)) body.notes = newNotes;
+      if (!Object.keys(body).length) { state.appointmentDrawerId = null; render(); return; }
+      saveBtn.disabled = true; saveBtn.textContent = "Saving...";
+      api("/api/v1/crm/appointments/" + id, { method: "PATCH", body: body })
+        .then(function(updated){
+          state.allAppointments = (state.allAppointments || []).map(function(a){
+            if (a.id !== updated.id) return a;
+            var copy = {}; for (var k in a) copy[k] = a[k];
+            for (var k2 in updated) copy[k2] = updated[k2];
+            return copy;
+          });
+          showToast("Appointment updated");
+          state.appointmentDrawerId = null;
+          render();
+        })
+        .catch(function(err){ showToast(err.message, true); saveBtn.disabled = false; saveBtn.textContent = "Save Changes"; });
+    });
+  }
+
   function leadsHtml(){
     var tabs = '<div class="eg-tabs">' +
       '<div class="eg-tab' + (state.tab === "leads" ? " active" : "") + '" data-tab="leads">Leads</div>' +
       '<div class="eg-tab' + (state.tab === "contacts" ? " active" : "") + '" data-tab="contacts">Contacts</div>' +
+      '<div class="eg-tab' + (state.tab === "appointments" ? " active" : "") + '" data-tab="appointments">Appointments</div>' +
       '</div>';
-    return tabs + (state.tab === "contacts" ? contactsTabHtml() : leadsTabHtml());
+    var body = state.tab === "contacts" ? contactsTabHtml() : (state.tab === "appointments" ? appointmentsTabHtml() : leadsTabHtml());
+    return tabs + body;
   }
 
   function bindLeads(){
@@ -1135,6 +1303,7 @@
       el.addEventListener("click", function(){
         state.tab = el.getAttribute("data-tab");
         if (state.tab === "contacts") ensureContacts();
+        if (state.tab === "appointments") ensureAllAppointments();
         render();
       });
     });
@@ -1143,6 +1312,9 @@
     });
     document.querySelectorAll("[data-contact-drawer]").forEach(function(el){
       el.addEventListener("click", function(){ state.contactDrawerId = el.getAttribute("data-contact-drawer"); render(); });
+    });
+    document.querySelectorAll("[data-appointment-drawer]").forEach(function(el){
+      el.addEventListener("click", function(){ state.appointmentDrawerId = el.getAttribute("data-appointment-drawer"); render(); });
     });
 
     var leadSearch = document.getElementById("egLeadSearch");
@@ -1161,8 +1333,15 @@
     });
     var contactDateFilter = document.getElementById("egContactDateFilter");
     if (contactDateFilter) contactDateFilter.addEventListener("change", function(){ state.contactDateFilter = contactDateFilter.value; state.contactPage = 1; render(); });
+    var appointmentSearch = document.getElementById("egAppointmentSearch");
+    if (appointmentSearch) appointmentSearch.addEventListener("input", function(){
+      preserveFocus(function(){ state.appointmentSearch = appointmentSearch.value; state.appointmentPage = 1; render(); });
+    });
+    var appointmentStatusFilter = document.getElementById("egAppointmentStatusFilter");
+    if (appointmentStatusFilter) appointmentStatusFilter.addEventListener("change", function(){ state.appointmentStatusFilter = appointmentStatusFilter.value; state.appointmentPage = 1; render(); });
     bindPager("egLead", "leadPage");
     bindPager("egContact", "contactPage");
+    bindPager("egAppointment", "appointmentPage");
 
     // CSV export deliberately ignores the on-screen date filter - it's the
     // "full history" escape hatch for anything older than what's rendered
