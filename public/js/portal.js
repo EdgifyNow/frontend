@@ -2069,7 +2069,7 @@
         '<div class="eg-kv"><span>Connection</span><b>' + (c.coexistence ? "Coexistence" : "Direct") + '</b></div>' +
         (c.token_expires_at ? '<div class="eg-kv"><span>Token expires</span><b>' + fmtDate(c.token_expires_at) + '</b></div>' : "") +
         '<div style="display:flex;gap:10px;margin-top:10px">' +
-        '<button class="eg-btn ghost" id="egWhatsappReconnect"' + (c.app_id ? "" : " disabled") + '>Reconnect</button>' +
+        '<button class="eg-btn ghost" id="egWhatsappReconnect"' + ((c.app_id && !state.whatsappSignupInProgress && !state.whatsappConnecting) ? "" : " disabled") + '>Reconnect</button>' +
         '<button class="eg-btn danger" id="egWhatsappDisconnect">Disconnect</button>' +
         '</div></div>';
     }
@@ -2078,26 +2078,65 @@
       '<div class="eg-row"><h3>WhatsApp Connection</h3><span class="eg-pill">Not Connected</span></div>' +
       '<p class="eg-small eg-muted" style="margin-top:-6px">Connect your existing WhatsApp Business number. You can continue using the WhatsApp Business app.</p>' +
       (c.app_id
-        ? '<button class="eg-btn" id="egWhatsappConnect"' + (state.whatsappConnecting ? " disabled" : "") + '>' + (state.whatsappConnecting ? "Connecting..." : "Connect WhatsApp") + '</button>'
+        ? '<button class="eg-btn" id="egWhatsappConnect"' + ((state.whatsappConnecting || state.whatsappSignupInProgress) ? " disabled" : "") + '>' + ((state.whatsappConnecting || state.whatsappSignupInProgress) ? "Connecting..." : "Connect WhatsApp") + '</button>'
         : '<div class="eg-small eg-muted">WhatsApp connection isn\'t configured on this server yet (missing Meta app id).</div>') +
       '</div>';
   }
 
-  function completeWhatsappEmbeddedSignup(code, wabaId, phoneNumberId, displayPhoneNumber){
+  function completeWhatsappEmbeddedSignup(code, wabaId, phoneNumberId, displayPhoneNumber, isCoexistence){
     state.whatsappConnecting = true;
     render();
     api("/api/v1/integrations/whatsapp/embedded-signup/complete", {
       method: "POST",
-      body: { code: code, waba_id: wabaId, phone_number_id: phoneNumberId, display_phone_number: displayPhoneNumber }
-    }).then(function(d){
-      state.whatsappConnection = Object.assign({}, state.whatsappConnection, d);
+      // phone_number_id is optional as of backend rc71 - Meta's documented
+      // coexistence completion event (FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING)
+      // can omit it entirely, and the backend now looks it up itself from
+      // the WABA when that happens. is_coexistence is the frontend's own
+      // read of which FINISH event actually fired (see launchWhatsappEmbeddedSignup),
+      // which the backend needs to decide whether phone registration should
+      // be skipped - see the schema's own docstring for why.
+      body: { code: code, waba_id: wabaId, phone_number_id: phoneNumberId || null, display_phone_number: displayPhoneNumber, is_coexistence: !!isCoexistence }
+    }).then(function(){
+      // "Connecting" deliberately stays active through this follow-up
+      // read - Connected must never be shown on the strength of the POST
+      // alone, only once a fresh status fetch independently confirms it.
+      return api("/api/v1/integrations/whatsapp/status");
+    }).then(function(status){
       state.whatsappConnecting = false;
       state.whatsappSignupInProgress = false;
-      showToast("WhatsApp connected");
+      // launchWhatsappEmbeddedSignup's settle() only resumes the idle
+      // timer on its own give-up path, not here - stopIdleTimer() was
+      // called when the popup launched and nothing else guarantees this
+      // resumes right when the backend call actually finishes, rather
+      // than opportunistically whenever the user next happens to move
+      // the mouse (resetIdleTimer's own activity-listener guard only
+      // blocks on whatsappSignupInProgress, which is already false by
+      // the time this runs - but "eventually, on next interaction" isn't
+      // the same as "now that this attempt is actually over").
+      resetIdleTimer();
+      state.whatsappConnection = Object.assign({}, state.whatsappConnection, status);
+      if (status && status.connected) {
+        showToast("WhatsApp connected");
+      } else {
+        // The POST succeeded but a fresh read doesn't show it as
+        // connected yet - never claim success here; say so plainly
+        // instead of silently treating a non-connected read as done.
+        showToast("WhatsApp setup finished, but the connection isn't showing as active yet. Please refresh, or try Reconnect.", true);
+      }
       render();
     }).catch(function(err){
       state.whatsappConnecting = false;
       state.whatsappSignupInProgress = false;
+      // Same reasoning as the success branch above - resume deterministically
+      // now that this attempt is over, not only whenever the user next moves
+      // the mouse. A cleared state.token (handled just below) makes this a
+      // no-op via resetIdleTimer's own "if (!state.token)" guard, which is
+      // correct - there's no session left to keep alive.
+      resetIdleTimer();
+      // Covers both the POST and the follow-up status GET failing - either
+      // way this is not success, and the real error is shown, never
+      // silently swallowed or mistaken for a connected state.
+      //
       // A session that expired or was otherwise invalidated during the
       // popup leaves state.token cleared by api()'s own 401 handling
       // (or, for a stale token with no Authorization header at all, a
@@ -2114,35 +2153,162 @@
     });
   }
 
+  // Diagnostic-only logging for a reported bug: Meta's own popup reaches
+  // "Finish" but the portal still shows "cancelled or didn't complete", and
+  // no backend request is seen. This never logs event.data, a code, or a
+  // token - only booleans/short strings/timestamps - so it's safe to ship
+  // ahead of a behavior fix and capture exactly one real attempt. Remove
+  // once the real cause (likely the coexistence completion event using a
+  // different event name - see parsedEvent below) is confirmed and fixed.
+  function logWhatsappSignupDiagnostic(stage, fields){
+    try { console.log("[whatsapp-embedded-signup] " + stage, Object.assign({ t: Date.now() }, fields)); } catch(e) {}
+  }
+
+  // How long to wait for a late session-info message once the SDK login
+  // callback has already fired with a real code - the message and the SDK
+  // callback are two independent async events with no guaranteed order
+  // (confirmed cause of a real production failure: Meta's own popup
+  // reached Finish, but the callback fired before the message had been
+  // processed, so a successful connection was discarded as "cancelled").
+  var WHATSAPP_SIGNUP_SESSION_INFO_WAIT_MS = 1500;
+  var WHATSAPP_SIGNUP_SESSION_INFO_POLL_MS = 100;
+  // Meta's documented completion event names only - an explicit allowlist
+  // rather than a "FINISH" prefix match, so an undocumented future event
+  // name can't be silently treated as a successful completion.
+  var WHATSAPP_SIGNUP_FINISH_EVENTS = [
+    "FINISH", "FINISH_ONLY_WABA", "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING",
+    "FINISH_OBO_MIGRATION", "FINISH_GRANT_ONLY_API_ACCESS"
+  ];
+
   function launchWhatsappEmbeddedSignup(){
     var c = state.whatsappConnection;
-    if (!c || !c.app_id) return;
+    // Also guards against a second popup/listener pair while one is
+    // already open - the Connect/Reconnect buttons disable themselves
+    // for the same reason (see whatsappConnectPanelHtml), this is the
+    // belt-and-suspenders check in case either is clicked before a
+    // re-render reflects that. whatsappConnecting matters here too: once
+    // the Meta popup itself finishes, settle() clears whatsappSignupInProgress
+    // right away and hands off to completeWhatsappEmbeddedSignup, which
+    // keeps whatsappConnecting true through its own POST + status GET -
+    // without checking it here too, a click during that window could start
+    // a second, concurrent signup attempt.
+    if (!c || !c.app_id || state.whatsappSignupInProgress || state.whatsappConnecting) return;
 
     state.whatsappSignupInProgress = true;
     stopIdleTimer();
+    render();
 
     var sessionInfo = null;
+    // Meta's documented FINISH-family event names: FINISH (ordinary
+    // signup), FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING (coexistence - the
+    // flow this panel actually requests via featureType below, and the
+    // one a production incident showed being silently ignored because
+    // only literal "FINISH" was ever matched), FINISH_ONLY_WABA,
+    // FINISH_OBO_MIGRATION, FINISH_GRANT_ONLY_API_ACCESS. Only the
+    // coexistence one skips phone registration backend side - that's
+    // exactly what finishEvent exists to tell the backend.
+    var finishEvent = null;
+    var pollTimer = null;
+    // Every exit from this attempt - a real completion, giving up, a late
+    // arrival of either - funnels through settle() exactly once. Without
+    // this, CANCEL/ERROR arriving when FB.login's own callback never
+    // fires at all (not guaranteed on every Meta-side cancel/error path)
+    // had nothing to react to it, and a callback that fired AFTER an
+    // earlier give-up (e.g. after CANCEL already settled this attempt)
+    // would submit a second request and show a second toast.
+    var settled = false;
+
+    function settle(kind, code){
+      if (settled) return;
+      settled = true;
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+      window.removeEventListener("message", messageListener);
+      state.whatsappSignupInProgress = false;
+      if (kind === "finish") {
+        completeWhatsappEmbeddedSignup(
+          code, sessionInfo.waba_id, sessionInfo.phone_number_id || null,
+          sessionInfo.display_phone_number || null, finishEvent === "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING"
+        );
+        return;
+      }
+      resetIdleTimer();
+      showToast("WhatsApp connection was cancelled or didn't complete", true);
+      render();
+    }
+
     var messageListener = function(event){
+      // Meta's own reference listener wraps JSON.parse in a bare try/catch
+      // and falls back to the raw value, implying event.data isn't always
+      // a JSON string - parse defensively so the diagnostic fields below,
+      // and the real event-name match, are accurate for either shape.
+      var raw = event && event.data;
+      var payload = null;
+      var parsed = false;
+      if (raw && typeof raw === "object") { payload = raw; parsed = true; }
+      else if (typeof raw === "string") {
+        try { payload = JSON.parse(raw); parsed = true; } catch(e) { parsed = false; }
+      }
+      var inner = (payload && typeof payload === "object" && payload.data) || {};
+      var eventName = (payload && typeof payload.event === "string") ? payload.event : null;
+      logWhatsappSignupDiagnostic("message", {
+        origin: event && event.origin,
+        parsed: parsed,
+        type: (payload && typeof payload.type === "string") ? payload.type : null,
+        event: eventName,
+        hasWaba: !!inner.waba_id,
+        hasPhone: !!inner.phone_number_id
+      });
+
+      // Strict exact-match origin allowlist - unchanged, not widened.
       if (event.origin !== "https://www.facebook.com" && event.origin !== "https://web.facebook.com") return;
-      var data;
-      try { data = JSON.parse(event.data); } catch(e) { return; }
-      if (data && data.type === "WA_EMBEDDED_SIGNUP" && data.event === "FINISH") {
-        sessionInfo = data.data || {};
+      if (!payload || payload.type !== "WA_EMBEDDED_SIGNUP" || !eventName) return;
+      if (WHATSAPP_SIGNUP_FINISH_EVENTS.indexOf(eventName) !== -1) {
+        sessionInfo = inner;
+        finishEvent = eventName;
+        // The poll loop below (if the SDK callback already fired and is
+        // waiting) picks this up on its next tick; if the callback hasn't
+        // fired yet, there's nothing to finish yet - only the callback
+        // carries the authorization code this still needs.
+      } else if (eventName === "CANCEL" || eventName === "ERROR") {
+        // Must terminate right here, not just record it for later - the
+        // SDK's own login callback is not guaranteed to fire on every
+        // cancel/error path, so waiting for it could hang indefinitely.
+        settle("giveup");
       }
     };
     window.addEventListener("message", messageListener);
 
     loadFacebookSdk(function(){
       window.FB.login(function(response){
-        window.removeEventListener("message", messageListener);
+        // A CANCEL/ERROR message (or an earlier give-up) may have already
+        // settled this attempt before Meta's own SDK gets around to
+        // invoking this callback - settle() is a no-op by then, this just
+        // makes that visible in the diagnostic log.
+        logWhatsappSignupDiagnostic("sdk-callback", { alreadySettled: settled });
+        if (settled) return;
+
         var code = response && response.authResponse && response.authResponse.code;
-        if (!code || !sessionInfo || !sessionInfo.waba_id || !sessionInfo.phone_number_id) {
-          state.whatsappSignupInProgress = false;
-          resetIdleTimer();
-          showToast("WhatsApp connection was cancelled or didn't complete", true);
-          return;
-        }
-        completeWhatsappEmbeddedSignup(code, sessionInfo.waba_id, sessionInfo.phone_number_id, sessionInfo.display_phone_number || null);
+        logWhatsappSignupDiagnostic("sdk-callback-detail", {
+          hasCode: !!code,
+          hasSessionInfo: !!(sessionInfo && sessionInfo.waba_id),
+          finishEvent: finishEvent
+        });
+
+        // phone_number_id is deliberately not required here - Meta's
+        // documented coexistence payload only ever includes waba_id, and
+        // the backend (rc71+) looks the phone number up itself when it's
+        // missing. waba_id is still required: nothing can be completed
+        // without it.
+        if (!code) { settle("giveup"); return; }
+        if (sessionInfo && sessionInfo.waba_id) { settle("finish", code); return; }
+
+        var waited = 0;
+        pollTimer = setInterval(function(){
+          if (settled) { clearInterval(pollTimer); pollTimer = null; return; } // safety net; settle() already clears this itself too
+          waited += WHATSAPP_SIGNUP_SESSION_INFO_POLL_MS;
+          if (sessionInfo && sessionInfo.waba_id) { settle("finish", code); return; }
+          if (waited >= WHATSAPP_SIGNUP_SESSION_INFO_WAIT_MS) { settle("giveup"); }
+        }, WHATSAPP_SIGNUP_SESSION_INFO_POLL_MS);
       }, {
         config_id: c.config_id,
         response_type: "code",
@@ -3209,6 +3375,22 @@
   window.addEventListener("focus", function(){
     if (state.view === "integrations" && state.token) ensureGoogleCalendarStatus();
   });
+
+  // Test-only hook: exposes real internal functions/state for Node-based
+  // tests to call directly, instead of a separately maintained copy of
+  // their logic. Inert everywhere else - it only runs when a test harness
+  // sets window.__EXPOSE_PORTAL_TEST_HOOKS__ = true BEFORE this script
+  // loads, which production and normal browser use never do.
+  if (typeof window !== "undefined" && window.__EXPOSE_PORTAL_TEST_HOOKS__) {
+    window.__portalTestHooks = {
+      state: state,
+      launchWhatsappEmbeddedSignup: launchWhatsappEmbeddedSignup,
+      completeWhatsappEmbeddedSignup: completeWhatsappEmbeddedSignup,
+      loadWhatsappConnection: loadWhatsappConnection,
+      hasActiveIdleTimer: function(){ return idleTimer !== null; },
+      resetIdleTimer: resetIdleTimer
+    };
+  }
 
   init();
 })();
