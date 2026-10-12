@@ -12,6 +12,15 @@
   // environment without a code change.
   var SESSION_IDLE_TIMEOUT_MINUTES = (window.EDGIFY_CONFIG && window.EDGIFY_CONFIG.SESSION_IDLE_TIMEOUT_MINUTES) || 10;
   var idleTimer = null;
+  // Bumped by doLogout() (see below) so a request issued under one login
+  // that only resolves after that session has ended can be told apart
+  // from one issued under whoever is logged in now. Without this, an
+  // in-flight request from tenant A that resolves after logout/login as
+  // tenant B would still run its .then(function(d){ state.xxx = d; ... })
+  // against the CURRENT state object (JS closures capture the state
+  // variable binding, not a snapshot) - writing tenant A's data into
+  // tenant B's live session. See api() below.
+  var sessionGeneration = 0;
   var root = document.getElementById("egApp");
   function AND(){ for (var i=0;i<arguments.length;i++){ if(!arguments[i]) return false; } return true; }
 
@@ -26,7 +35,14 @@
     return !!(window.EDGIFY_CONFIG && window.EDGIFY_CONFIG.FEATURE_VOICE_WHATSAPP);
   }
 
-  var state = {
+  // A factory, not a plain object literal, so doLogout() below can rebuild
+  // the same shape from scratch - the bug this fixes: logging out only
+  // ever cleared a hand-picked subset of fields (leads/contacts/documents/
+  // assistants/tenants), so every other cached, tenant-scoped field
+  // (voiceSettings among them) survived into the next login in the same
+  // tab and got shown - and could get saved - under the wrong tenant.
+  function initialState(){
+    return {
     token: localStorage.getItem(TOKEN_KEY) || null,
     user: null,
     view: "dashboard",
@@ -107,7 +123,9 @@
     whatsappDrawerId: null,
     whatsappDrawerDetail: null,
     whatsappLastUpdated: null
-  };
+    };
+  }
+  var state = initialState();
 
   function esc(s){
     if (s === null || s === undefined) return "";
@@ -151,6 +169,34 @@
   function fmtTime(d){
     if (!d) return "-";
     try { return new Date(d).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }); } catch(e){ return d; }
+  }
+  // Appointment start_at/end_at are NOT genuine UTC instants like
+  // created_at/updated_at above - per the tenant wall-clock convention
+  // (see availability.py's module docstring and widget.js's wallClockIso),
+  // their digits already ARE the tenant's own local time, just tagged
+  // UTC by convention. fmtDate/fmtTime would re-interpret those digits
+  // through the *viewer's* browser timezone and shift them (e.g. a 4pm
+  // appointment rendering as 12pm to a viewer 4 hours behind) - passing
+  // timeZone:"UTC" makes toLocaleString/toLocaleTimeString print the
+  // digits as-is instead of converting them.
+  function fmtApptDateTime(d){
+    if (!d) return "-";
+    try { return new Date(d).toLocaleString([], { timeZone: "UTC" }); } catch(e){ return d; }
+  }
+  function fmtApptTime(d){
+    if (!d) return "-";
+    try { return new Date(d).toLocaleTimeString([], { timeZone: "UTC", hour: "numeric", minute: "2-digit" }); } catch(e){ return d; }
+  }
+  // Same wall-clock convention as fmtApptDateTime/fmtApptTime above - a
+  // datetime-local input wants "YYYY-MM-DDTHH:MM" with no trailing Z, and
+  // since start_at/end_at's digits already ARE the tenant's local time,
+  // this is a plain slice, not a timezone conversion. Shared by both
+  // appointmentDrawerHtml() (prefill) and bindAppointmentDrawer() (change
+  // detection on save), so it lives at module scope rather than nested
+  // inside just one of them.
+  function toLocalInputValue(iso){
+    if (!iso) return "";
+    return iso.slice(0, 16);
   }
   function contactName(c){
     if (!c) return "Unknown contact";
@@ -276,6 +322,7 @@
 
   function api(path, opts){
     opts = opts || {};
+    var requestGeneration = sessionGeneration;
     var headers = opts.headers || {};
     if (state.token) headers["Authorization"] = "Bearer " + state.token;
     var isForm = AND(typeof FormData !== "undefined", opts.body instanceof FormData);
@@ -283,6 +330,17 @@
     if (AND(!isForm, opts.body)) headers["Content-Type"] = "application/json";
     return fetch(API_BASE + path, { method: opts.method || "GET", headers: headers, body: opts.body })
       .then(function(res){
+        if (requestGeneration !== sessionGeneration) {
+          // A logout happened while this request was in flight. Don't act
+          // on it at all - not as success (would write a stale tenant's
+          // data into whoever is logged in now) and not as a 401 failure
+          // either (the current session's token is probably fine; this
+          // response is just from the old one). Every caller chains
+          // .then(function(d){ state.xxx = d; render(); }), and there's no
+          // value that's safe to hand all of them - a promise that never
+          // settles means that callback simply never runs.
+          return new Promise(function(){});
+        }
         if (res.status === 401) {
           doLogout();
           var e = new Error("Session expired. Please log in again.");
@@ -310,11 +368,16 @@
   }
 
   function doLogout(){
-    state.token = null;
-    state.user = null;
     localStorage.removeItem(TOKEN_KEY);
-    state.leads = state.contacts = state.documents = state.assistants = state.tenants = null;
-    state.view = "dashboard";
+    // Rebuild from the same factory used on first load (see initialState()
+    // above) instead of hand-clearing a few fields, so nothing cached for
+    // this tenant can leak into whichever tenant logs in next in this tab.
+    state = initialState();
+    state.booting = false;
+    // Invalidates any request still in flight from the session that just
+    // ended - see api()'s requestGeneration check and sessionGeneration's
+    // own comment above.
+    sessionGeneration++;
     stopIdleTimer();
     render();
   }
@@ -1182,11 +1245,12 @@
     var filtered = filteredAppointments();
     var page = paginate(filtered, state.appointmentPage);
     var rows = page.pageItems.map(function(a){
-      // fmtDate/fmtTime never touch user input, and the "-" separator is
-      // plain text, not markup - safe to drop straight into the row
-      // without esc() (which would otherwise double-escape the &ndash;
-      // entity used elsewhere and print it literally instead of a dash).
-      var when = fmtDate(a.start_at) + (a.end_at ? " – " + fmtTime(a.end_at) : "");
+      // fmtApptDateTime/fmtApptTime never touch user input, and the "-"
+      // separator is plain text, not markup - safe to drop straight into
+      // the row without esc() (which would otherwise double-escape the
+      // &ndash; entity used elsewhere and print it literally instead of a
+      // dash).
+      var when = fmtApptDateTime(a.start_at) + (a.end_at ? " – " + fmtApptTime(a.end_at) : "");
       var where = a.meeting_url ? "Video call" : (a.location || "-");
       return '<tr class="eg-clickrow" style="cursor:pointer" data-appointment-drawer="' + esc(a.id) + '">' +
         '<td><b>' + esc(contactName(a.contact)) + '</b></td>' +
@@ -1209,14 +1273,6 @@
     if (!state.appointmentDrawerId) return "";
     var a = (state.allAppointments || []).filter(function(x){ return x.id === state.appointmentDrawerId; })[0];
     if (!a) return "";
-    // start_at/end_at come back as UTC ISO strings; a datetime-local input
-    // needs local wall-clock time with no trailing Z, hence the slice.
-    function toLocalInputValue(iso){
-      if (!iso) return "";
-      var d = new Date(iso);
-      d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
-      return d.toISOString().slice(0, 16);
-    }
     var statusSelect = '<select class="eg-select" id="egApptDrawerStatus">' + APPT_STATUS_OPTIONS.map(function(s){
       return '<option value="' + s + '"' + (s === a.status ? " selected" : "") + '>' + appointmentStatusLabel(s) + '</option>';
     }).join("") + '</select>';
@@ -1248,11 +1304,17 @@
       var original = (state.allAppointments || []).filter(function(a){ return a.id === id; })[0] || {};
       var startVal = document.getElementById("egApptDrawerStart").value;
       var endVal = document.getElementById("egApptDrawerEnd").value;
-      // datetime-local has no timezone of its own - new Date() on it is
-      // parsed in the browser's local zone, and toISOString() converts
-      // that to UTC for the API, matching what start_at/end_at came in as.
-      var newStartAt = startVal ? new Date(startVal).toISOString() : null;
-      var newEndAt = endVal ? new Date(endVal).toISOString() : null;
+      // datetime-local gives "YYYY-MM-DDTHH:MM" with no timezone of its
+      // own - those digits already ARE the tenant's wall-clock time (see
+      // toLocalInputValue above), so appending ":00Z" tags them the same
+      // way the backend does. Parsing via new Date(startVal).toISOString()
+      // used to read them in the browser's own timezone and convert to a
+      // different real UTC instant - the same mistake the booking widget
+      // made before its timezone fix (see widget.js's wallClockIso) -
+      // silently corrupting the saved time whenever the admin's browser
+      // timezone didn't match the tenant's configured one.
+      var newStartAt = startVal ? startVal + ":00Z" : null;
+      var newEndAt = endVal ? endVal + ":00Z" : null;
       var newMeetingUrl = document.getElementById("egApptDrawerMeetingUrl").value.trim() || null;
       var newNotes = document.getElementById("egApptDrawerNotes").value.trim() || null;
       var newStatus = document.getElementById("egApptDrawerStatus").value;
@@ -1266,8 +1328,8 @@
       // backend separately - this is a workaround, not a real fix.
       var body = {};
       if (newStatus !== original.status) body.status = newStatus;
-      if (newStartAt !== (original.start_at ? new Date(original.start_at).toISOString() : null)) body.start_at = newStartAt;
-      if (newEndAt !== (original.end_at ? new Date(original.end_at).toISOString() : null)) body.end_at = newEndAt;
+      if (newStartAt !== (original.start_at ? toLocalInputValue(original.start_at) + ":00Z" : null)) body.start_at = newStartAt;
+      if (newEndAt !== (original.end_at ? toLocalInputValue(original.end_at) + ":00Z" : null)) body.end_at = newEndAt;
       if (newMeetingUrl !== (original.meeting_url || null)) body.meeting_url = newMeetingUrl;
       if (newNotes !== (original.notes || null)) body.notes = newNotes;
       if (!Object.keys(body).length) { state.appointmentDrawerId = null; render(); return; }
@@ -1987,7 +2049,7 @@
     var body = rows.length === 0
       ? '<div class="eg-small eg-muted">No SMS reminders sent yet.</div>'
       : rows.map(function(r){
-          var when = r.appointment_start_at ? fmtDate(r.appointment_start_at) : "-";
+          var when = r.appointment_start_at ? fmtApptDateTime(r.appointment_start_at) : "-";
           var who = (r.contact_name || "Unknown") + (r.contact_phone ? " (" + r.contact_phone + ")" : "");
           var statusColor = STATUS_COLOR[r.delivery_status] || STATUS_COLOR[r.status] || "#374151";
           return '<div class="eg-row" style="gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px solid #eee">' +
@@ -2445,7 +2507,7 @@
       var opts = apptStatusOptions.map(function(s){
         return '<option value="' + s + '"' + (s === a.status ? " selected" : "") + '>' + esc(s.replace("_", " ")) + '</option>';
       }).join("");
-      var when = fmtDate(a.start_at) + (a.end_at ? " &ndash; " + new Date(a.end_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "");
+      var when = fmtApptDateTime(a.start_at) + (a.end_at ? " &ndash; " + fmtApptTime(a.end_at) : "");
       var where = a.meeting_url ? '<a href="' + esc(a.meeting_url) + '" target="_blank" rel="noopener">Meeting link</a>' : (a.location ? esc(a.location) : "");
       return '<div class="eg-statusbox" style="margin-bottom:10px">' +
         '<b>' + when + '</b>' +
@@ -3383,13 +3445,23 @@
   // loads, which production and normal browser use never do.
   if (typeof window !== "undefined" && window.__EXPOSE_PORTAL_TEST_HOOKS__) {
     window.__portalTestHooks = {
-      state: state,
       launchWhatsappEmbeddedSignup: launchWhatsappEmbeddedSignup,
       completeWhatsappEmbeddedSignup: completeWhatsappEmbeddedSignup,
       loadWhatsappConnection: loadWhatsappConnection,
       hasActiveIdleTimer: function(){ return idleTimer !== null; },
-      resetIdleTimer: resetIdleTimer
+      resetIdleTimer: resetIdleTimer,
+      doLogout: doLogout,
+      fmtApptDateTime: fmtApptDateTime,
+      fmtApptTime: fmtApptTime,
+      render: render,
+      loadVoiceSettings: loadVoiceSettings
     };
+    // A plain "state: state" property would snapshot the object that
+    // existed at load time - doLogout() now reassigns the state variable
+    // itself (see initialState() above) rather than mutating it in place,
+    // so a snapshot would silently go stale after the first logout. This
+    // getter always reads the current binding instead.
+    Object.defineProperty(window.__portalTestHooks, "state", { get: function(){ return state; } });
   }
 
   init();
