@@ -369,6 +369,16 @@
 
   function doLogout(){
     localStorage.removeItem(TOKEN_KEY);
+    // Must run before state is reassigned below: stopChannelAutoRefresh()
+    // clears setInterval(...) via state._channelRefreshTimer, a runtime-only
+    // field that isn't part of initialState()'s literal. Clearing it after
+    // the reassignment would check the field on the brand-new object (always
+    // empty) and silently fail to find the real interval id, which still
+    // lives on the old, about-to-be-discarded state object - orphaning a
+    // 7-second poll that runs forever, re-rendering the whole page (and
+    // wiping an in-progress, unsaved input's typed text) regardless of which
+    // tenant is now logged in or which screen they're on.
+    stopChannelAutoRefresh();
     // Rebuild from the same factory used on first load (see initialState()
     // above) instead of hand-clearing a few fields, so nothing cached for
     // this tenant can leak into whichever tenant logs in next in this tab.
@@ -3454,7 +3464,10 @@
       fmtApptDateTime: fmtApptDateTime,
       fmtApptTime: fmtApptTime,
       render: render,
-      loadVoiceSettings: loadVoiceSettings
+      loadVoiceSettings: loadVoiceSettings,
+      startChannelAutoRefresh: startChannelAutoRefresh,
+      hasActiveChannelAutoRefresh: function(){ return !!state._channelRefreshTimer; },
+      CHANNEL_ACTIVITY: CHANNEL_ACTIVITY
     };
     // A plain "state: state" property would snapshot the object that
     // existed at load time - doLogout() now reassigns the state variable

@@ -101,6 +101,38 @@ test("doLogout clears voiceSettings (and every other lazily-cached field), not j
   assert(JSON.stringify(hooks.state) === original, "post-logout state is byte-for-byte the same as a fresh page load's initial state");
 });
 
+test("logging out while the Voice/WhatsApp Activity auto-refresh poll is running clears it, instead of orphaning it forever", () => {
+  // Real incident: a user visited Voice Activity (starting the 7-second
+  // background poll), then logged out and into a different tenant in the
+  // same tab. doLogout() reassigns `state` to a brand-new object via
+  // initialState() (see that fix above) - but _channelRefreshTimer is a
+  // runtime-only field, never part of initialState()'s literal, so it
+  // doesn't exist on the new object. stopChannelAutoRefresh() (called later
+  // by setView() on any non-voice/whatsapp screen) checks the CURRENT
+  // state's _channelRefreshTimer, finds nothing, and never clears the real
+  // interval still running against the old, discarded state object - an
+  // orphaned poll that fires forever, on every screen, calling render()
+  // every 7 seconds and wiping whatever the new tenant's user is mid-typing
+  // (e.g. the AI Assistant test-chat box, which has no state-backed value
+  // and is wiped by any unrelated re-render while focused).
+  const { hooks, win } = buildPage();
+  hooks.state.token = "fake-token";
+
+  const clearedIds = [];
+  const realClearInterval = win.clearInterval;
+  win.clearInterval = function (id) { clearedIds.push(id); return realClearInterval.call(win, id); };
+
+  hooks.startChannelAutoRefresh(hooks.CHANNEL_ACTIVITY.voice);
+  const timerId = hooks.state._channelRefreshTimer;
+  assert(timerId !== null && timerId !== undefined, "auto-refresh timer actually started");
+  assert(hooks.hasActiveChannelAutoRefresh(), "hasActiveChannelAutoRefresh reports true while it's running");
+
+  hooks.doLogout();
+
+  assert(clearedIds.indexOf(timerId) !== -1, "the exact timer id that was started got cleared on logout, not silently orphaned");
+  assert(!hooks.hasActiveChannelAutoRefresh(), "no active channel-refresh timer remains after logout");
+});
+
 test("the next tenant's login, in the same tab, no longer inherits the previous tenant's cached voiceSettings", () => {
   const { hooks } = buildPage();
   // Simulate: logged in as tenant A, opened Voice Settings (now cached).
