@@ -300,6 +300,105 @@ test("changing the appointment time in the drawer sends the new wall-clock digit
   });
 });
 
+// ---- New Appointment drawer: the Appointments screen had no way to book
+// one at all, only edit an existing one. Drives the real UI (search a
+// lead, pick it, fill a time, submit) through the real create endpoint. ----
+
+function openLeadsAppointmentsTab(hooks, { leads, contacts, allAppointments }) {
+  hooks.state.token = "fake-token";
+  hooks.state.user = { id: "u1", role: "client", email: "owner@example.com" };
+  hooks.state.booting = false;
+  hooks.state.view = "leads";
+  hooks.state.tab = "appointments";
+  hooks.state.leads = leads;
+  hooks.state.contacts = contacts;
+  hooks.state.allAppointments = allAppointments;
+  hooks.render();
+}
+
+test("the Appointments screen has a working New Appointment button that opens the picker drawer", () => {
+  const { win, hooks } = buildPage();
+  openLeadsAppointmentsTab(hooks, { leads: [], contacts: [], allAppointments: [] });
+
+  assert(!!win.document.getElementById("egNewAppointmentBtn"), "the + New Appointment button is rendered on the Appointments tab");
+  assert(!win.document.getElementById("egNewApptDrawerBackdrop"), "drawer is closed before the button is clicked");
+
+  win.document.getElementById("egNewAppointmentBtn").dispatchEvent(new win.Event("click"));
+
+  assert(!!win.document.getElementById("egNewApptDrawerBackdrop"), "drawer opens on click");
+  assert(!!win.document.getElementById("egNewApptLeadSearch"), "lead search box is shown before a lead is picked");
+  assert(win.document.getElementById("egNewApptCreate").disabled, "Create is disabled until a lead is selected");
+});
+
+test("searching and picking a lead in the New Appointment drawer, then submitting, creates a correctly-shaped appointment", () => {
+  const { win, hooks, fetchCalls, setFetchHandler } = buildPage();
+  const contact = { id: "c1", first_name: "Priya", last_name: "Shah", phone: "+15551234567", email: "priya@example.com" };
+  const lead = { id: "lead1", contact_id: "c1", service_interest: "Catering", status: "new" };
+  openLeadsAppointmentsTab(hooks, { leads: [lead], contacts: [contact], allAppointments: [] });
+  hooks.state.tenantSelf = { voice_timezone: "America/New_York" };
+
+  win.document.getElementById("egNewAppointmentBtn").dispatchEvent(new win.Event("click"));
+  const search = win.document.getElementById("egNewApptLeadSearch");
+  search.value = "priya";
+  search.dispatchEvent(new win.Event("input"));
+
+  const pick = win.document.querySelector("[data-pick-lead='lead1']");
+  assert(!!pick, "the matching lead shows up as a pickable candidate");
+  pick.dispatchEvent(new win.Event("click"));
+
+  assert(!win.document.getElementById("egNewApptLeadSearch"), "search box is replaced by the selected-lead summary once picked");
+  assert(!win.document.getElementById("egNewApptCreate").disabled, "Create becomes enabled once a lead is selected");
+
+  setFetchHandler(() => Promise.resolve({
+    status: 201, ok: true,
+    text: () => Promise.resolve(JSON.stringify({
+      id: "appt-new", lead_id: "lead1", status: "scheduled",
+      start_at: "2026-11-05T16:00:00Z", end_at: null, meeting_url: null, notes: null, timezone: "America/New_York",
+    })),
+  }));
+
+  win.document.getElementById("egNewApptStart").value = "2026-11-05T16:00";
+  win.document.getElementById("egNewApptCreate").dispatchEvent(new win.Event("click"));
+
+  return Promise.resolve().then(() => Promise.resolve()).then(() => {
+    const call = fetchCalls.filter((c) => String(c.url).indexOf("/crm/leads/lead1/appointments") !== -1)[0];
+    assert(!!call, "POST to the existing create-appointment endpoint was made");
+    const body = JSON.parse(call.opts.body);
+    assert(body.start_at === "2026-11-05T16:00:00Z", "start_at sent as wall-clock digits, not shifted by host TZ=" + process.env.TZ + " (got: " + body.start_at + ")");
+    assert(body.timezone === "America/New_York", "the tenant's own configured timezone is sent explicitly, not left for the backend to default");
+
+    assert(hooks.state.newAppointmentDrawerOpen === false, "drawer closes after a successful create");
+    const created = hooks.state.allAppointments.filter((a) => a.id === "appt-new")[0];
+    assert(!!created, "the new appointment is added to allAppointments immediately, not only after a reload");
+    assert(created.contact && created.contact.id === "c1", "the new entry has .contact attached, matching every other appointment's shape (avoids showing \"Unknown contact\")");
+  });
+});
+
+test("a booking conflict (409) from the server is shown as an error and keeps the drawer open for a retry", () => {
+  const { win, hooks, setFetchHandler } = buildPage();
+  const contact = { id: "c1", first_name: "Priya", last_name: "Shah", phone: "+15551234567" };
+  const lead = { id: "lead1", contact_id: "c1" };
+  openLeadsAppointmentsTab(hooks, { leads: [lead], contacts: [contact], allAppointments: [] });
+
+  win.document.getElementById("egNewAppointmentBtn").dispatchEvent(new win.Event("click"));
+  hooks.state.newAppointmentSelectedLeadId = "lead1";
+  hooks.render();
+
+  setFetchHandler(() => Promise.resolve({
+    status: 409, ok: false,
+    text: () => Promise.resolve(JSON.stringify({ detail: "That time is already booked, please choose a different slot" })),
+  }));
+
+  win.document.getElementById("egNewApptStart").value = "2026-11-05T16:00";
+  win.document.getElementById("egNewApptCreate").dispatchEvent(new win.Event("click"));
+
+  return Promise.resolve().then(() => Promise.resolve()).then(() => Promise.resolve()).then(() => {
+    assert(hooks.state.newAppointmentDrawerOpen === true, "drawer stays open after a validation error, so the admin can pick a different time");
+    assert(hooks.state.toast && hooks.state.toast.isError && hooks.state.toast.msg.indexOf("already booked") !== -1,
+      "the real backend validation error is surfaced to the admin, not swallowed - got: " + JSON.stringify(hooks.state.toast));
+  });
+});
+
 let p = Promise.resolve();
 for (const t of pending) {
   p = p.then(() => t.fn()).catch((e) => { console.error("FAIL (threw): " + t.name + " - " + e.stack); failures++; });

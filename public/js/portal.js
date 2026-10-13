@@ -83,6 +83,9 @@
     appointmentStatusFilter: "all",
     appointmentPage: 1,
     appointmentDrawerId: null,
+    newAppointmentDrawerOpen: false,
+    newAppointmentLeadQuery: "",
+    newAppointmentSelectedLeadId: null,
     widgetKey: undefined, // undefined = not fetched yet, null = fetched, none exists
     integrationConnections: null, // GET /integrations/connections - see googleCalendarConnection()
     widgetIdDraft: "",
@@ -736,7 +739,7 @@
       '</div>' +
       '<div id="egContent"></div>' +
       '</main>' +
-      '</div>' + toastHtml + leadDrawerHtml() + contactDrawerHtml() + appointmentDrawerHtml() + voiceDrawerHtml() + whatsappDrawerHtml();
+      '</div>' + toastHtml + leadDrawerHtml() + contactDrawerHtml() + appointmentDrawerHtml() + newAppointmentDrawerHtml() + voiceDrawerHtml() + whatsappDrawerHtml();
 
     document.querySelectorAll("[data-nav]").forEach(function(el){
       el.addEventListener("click", function(){
@@ -748,6 +751,7 @@
     bindDrawer();
     bindContactDrawer();
     bindAppointmentDrawer();
+    bindNewAppointmentDrawer();
     bindAllChannelDrawers();
 
     renderContent();
@@ -1274,6 +1278,7 @@
       '<div class="eg-toolbar">' +
       '<input id="egAppointmentSearch" placeholder="Search by contact, email, phone..." value="' + esc(state.appointmentSearch) + '" />' +
       '<select id="egAppointmentStatusFilter">' + selOpts(["all"].concat(APPT_STATUS_OPTIONS).map(function(s){ return { value: s, label: s === "all" ? "All Statuses" : appointmentStatusLabel(s) }; }), state.appointmentStatusFilter) + '</select>' +
+      '<button class="eg-btn" id="egNewAppointmentBtn">+ New Appointment</button>' +
       '</div>' +
       (rows ? '<table class="eg-table"><thead><tr><th>Contact</th><th>When</th><th>Status</th><th>Location</th><th>Booked</th><th>Actions</th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div class="eg-empty">' + (state.appointmentSearch ? "No matching appointments." : "No appointments yet.") + '</div>') +
       pagerHtml("egAppointment", page, "appointments") +
@@ -1360,6 +1365,133 @@
     });
   }
 
+  // ---- New Appointment (create, not edit) - the Appointments screen had
+  // no way to book one at all, only edit an existing one. Reuses the same
+  // POST .../leads/{lead_id}/appointments endpoint the lead drawer's own
+  // appointment flows already use, and the same wall-clock datetime-local
+  // handling as the edit drawer above - no new backend work, no new
+  // timezone logic, just the missing entry point.
+  function newAppointmentDrawerHtml(){
+    if (!state.newAppointmentDrawerOpen) return "";
+    var q = (state.newAppointmentLeadQuery || "").toLowerCase().trim();
+    var candidates = q ? joinedLeads().filter(function(r){
+      var c = r.contact || {};
+      var text = [contactName(c), c.email, c.phone, r.service_interest, r.title].filter(Boolean).join(" ").toLowerCase();
+      return text.indexOf(q) !== -1;
+    }).slice(0, 8) : [];
+    var selected = state.newAppointmentSelectedLeadId
+      ? joinedLeads().filter(function(r){ return r.id === state.newAppointmentSelectedLeadId; })[0]
+      : null;
+
+    var pickerHtml = selected
+      ? '<div class="eg-statusbox" style="margin-bottom:10px">' +
+          '<b>' + esc(contactName(selected.contact)) + '</b>' +
+          '<div class="eg-small eg-muted">' + esc((selected.contact && (selected.contact.phone || selected.contact.email)) || "") + '</div>' +
+          '<button class="eg-btn ghost small" id="egNewApptChangeLead" style="margin-top:6px">Change</button>' +
+        '</div>'
+      : '<div class="eg-form-row"><label>Lead</label>' +
+          '<input class="eg-input" id="egNewApptLeadSearch" placeholder="Search by name, email, or phone..." value="' + esc(state.newAppointmentLeadQuery) + '" autocomplete="off" />' +
+          (q
+            ? (candidates.length
+                ? '<div style="margin-top:6px">' + candidates.map(function(r){
+                    return '<div class="eg-clickrow" data-pick-lead="' + esc(r.id) + '" style="padding:8px;cursor:pointer;border:1px solid #e3e3e3;border-radius:6px;margin-top:4px">' +
+                      '<b>' + esc(contactName(r.contact)) + '</b> <span class="eg-small eg-muted">' + esc((r.contact && (r.contact.phone || r.contact.email)) || "") + '</span></div>';
+                  }).join("") + '</div>'
+                : '<div class="eg-small eg-muted" style="margin-top:6px">No matching leads.</div>')
+            : '') +
+        '</div>';
+
+    return '<div class="eg-drawer-backdrop open" id="egNewApptDrawerBackdrop"></div>' +
+      '<aside class="eg-drawer open">' +
+      '<button class="eg-drawer-close" id="egNewApptDrawerClose" aria-label="Close">&times;</button>' +
+      '<h2>New Appointment</h2>' +
+      '<div class="eg-drawer-sub">Book an appointment for an existing lead</div>' +
+      pickerHtml +
+      '<div class="eg-form-row"><label>Start</label><input class="eg-input" type="datetime-local" id="egNewApptStart" /></div>' +
+      '<div class="eg-form-row"><label>End <span class="eg-small eg-muted">(optional)</span></label><input class="eg-input" type="datetime-local" id="egNewApptEnd" /></div>' +
+      '<div class="eg-form-row"><label>Meeting URL <span class="eg-small eg-muted">(optional)</span></label><input class="eg-input" id="egNewApptMeetingUrl" placeholder="https://..." /></div>' +
+      '<div class="eg-form-row"><label>Notes</label><textarea class="eg-textarea" id="egNewApptNotes" style="min-height:70px"></textarea></div>' +
+      '<button class="eg-btn" id="egNewApptCreate"' + (selected ? "" : " disabled") + '>Create Appointment</button>' +
+      '</aside>';
+  }
+  function closeNewApptDrawer(){
+    state.newAppointmentDrawerOpen = false;
+    state.newAppointmentLeadQuery = "";
+    state.newAppointmentSelectedLeadId = null;
+    render();
+  }
+  function bindNewAppointmentDrawer(){
+    if (!state.newAppointmentDrawerOpen) return;
+
+    var backdrop = document.getElementById("egNewApptDrawerBackdrop");
+    if (backdrop) backdrop.addEventListener("click", closeNewApptDrawer);
+    var closeBtn = document.getElementById("egNewApptDrawerClose");
+    if (closeBtn) closeBtn.addEventListener("click", closeNewApptDrawer);
+
+    var search = document.getElementById("egNewApptLeadSearch");
+    if (search) search.addEventListener("input", function(){
+      preserveFocus(function(){ state.newAppointmentLeadQuery = search.value; render(); });
+    });
+    document.querySelectorAll("[data-pick-lead]").forEach(function(el){
+      el.addEventListener("click", function(){
+        state.newAppointmentSelectedLeadId = el.getAttribute("data-pick-lead");
+        render();
+      });
+    });
+    var changeBtn = document.getElementById("egNewApptChangeLead");
+    if (changeBtn) changeBtn.addEventListener("click", function(){
+      state.newAppointmentSelectedLeadId = null;
+      state.newAppointmentLeadQuery = "";
+      render();
+    });
+
+    var createBtn = document.getElementById("egNewApptCreate");
+    if (createBtn) createBtn.addEventListener("click", function(){
+      var leadId = state.newAppointmentSelectedLeadId;
+      if (!leadId) return;
+      var startVal = document.getElementById("egNewApptStart").value;
+      if (!startVal) { showToast("Please choose a start time", true); return; }
+      var endVal = document.getElementById("egNewApptEnd").value;
+      // Same wall-clock convention as the edit drawer: the datetime-local
+      // value's digits already ARE the tenant's local time, so ":00Z" just
+      // tags them the same way the backend does - no new Date()/
+      // toISOString() conversion, which would shift them. The tenant's
+      // own configured zone is sent explicitly rather than left for the
+      // backend to default, closing the same gap already flagged for the
+      // CRM appointment-creation endpoint (it has no server-side fallback
+      // the way the public booking endpoint does).
+      var body = {
+        start_at: startVal + ":00Z",
+        end_at: endVal ? endVal + ":00Z" : null,
+        meeting_url: document.getElementById("egNewApptMeetingUrl").value.trim() || null,
+        notes: document.getElementById("egNewApptNotes").value.trim() || null,
+        timezone: (state.tenantSelf && state.tenantSelf.voice_timezone) || null
+      };
+      createBtn.disabled = true; createBtn.textContent = "Creating...";
+      api("/api/v1/crm/leads/" + leadId + "/appointments", { method: "POST", body: body })
+        .then(function(created){
+          // The create response has no .contact/.lead - every other entry
+          // in allAppointments gets those attached client-side (see
+          // ensureAllAppointments), so this matches that same shape
+          // instead of showing "Unknown contact" until the next reload.
+          var lead = (state.leads || []).filter(function(l){ return l.id === leadId; })[0] || null;
+          var copy = {};
+          for (var k in created) copy[k] = created[k];
+          copy.lead = lead;
+          copy.contact = lead ? (contactMapFromState()[lead.contact_id] || null) : null;
+          state.allAppointments = (state.allAppointments || []).concat([copy]).sort(function(x, y){
+            return new Date(x.start_at) - new Date(y.start_at);
+          });
+          showToast("Appointment created");
+          closeNewApptDrawer();
+        })
+        .catch(function(err){
+          showToast(err.message, true);
+          createBtn.disabled = false; createBtn.textContent = "Create Appointment";
+        });
+    });
+  }
+
   function leadsHtml(){
     var tabs = '<div class="eg-tabs">' +
       '<div class="eg-tab' + (state.tab === "leads" ? " active" : "") + '" data-tab="leads">Leads</div>' +
@@ -1411,6 +1543,12 @@
     });
     var appointmentStatusFilter = document.getElementById("egAppointmentStatusFilter");
     if (appointmentStatusFilter) appointmentStatusFilter.addEventListener("change", function(){ state.appointmentStatusFilter = appointmentStatusFilter.value; state.appointmentPage = 1; render(); });
+    // Lives in appointmentsTabHtml()'s own output (tab content bound here,
+    // same as the search/filter above it) - not in the drawer HTML itself,
+    // which is why this can't be bound from bindNewAppointmentDrawer()
+    // (that runs against the outer shell, before #egContent exists).
+    var newApptBtn = document.getElementById("egNewAppointmentBtn");
+    if (newApptBtn) newApptBtn.addEventListener("click", function(){ state.newAppointmentDrawerOpen = true; render(); });
     bindPager("egLead", "leadPage");
     bindPager("egContact", "contactPage");
     bindPager("egAppointment", "appointmentPage");
