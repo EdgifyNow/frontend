@@ -61,10 +61,28 @@
     var digits = usPhoneDigits(phone);
     return digits ? "+1" + digits : null;
   }
-  function isFutureDateTime(dateInputValue){
-    if (!dateInputValue) return false;
-    var d = new Date(dateInputValue);
-    return !isNaN(d.getTime()) && d.getTime() > Date.now();
+  // The backend treats appointment timestamps as the tenant's own local
+  // wall-clock time, written as-is with no timezone conversion (see
+  // engine/backend/app/availability.py's own docs) - the same convention
+  // voice and text AI bookings already use correctly. "when" from the
+  // datetime-local input is exactly that: wall-clock digits with no
+  // timezone info of their own. Running it through a real Date/
+  // toISOString round-trip applies the VISITOR's browser timezone and
+  // silently shifts the hour - a visitor in the business's own Eastern
+  // timezone picking 4:00 PM became 20:00Z (EDT) or 21:00Z (EST), which
+  // the backend then read literally as 8/9 PM and rejected as outside
+  // business hours. Build the ISO string from the plain digits instead;
+  // Date.UTC here is only a neutral calendar calculator for adding the
+  // appointment duration, never real-world time arithmetic. Always
+  // produces a Z-suffixed (zero-offset) string - the backend's schema
+  // now explicitly rejects any other offset for exactly this reason.
+  function wallClockIso(when, addMinutes){
+    var m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?/.exec(when);
+    if (!m) return null;
+    var d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0)) + (addMinutes || 0) * 60000);
+    function pad(n){ return (n < 10 ? "0" : "") + n; }
+    return d.getUTCFullYear() + "-" + pad(d.getUTCMonth() + 1) + "-" + pad(d.getUTCDate()) + "T" +
+      pad(d.getUTCHours()) + ":" + pad(d.getUTCMinutes()) + ":" + pad(d.getUTCSeconds()) + "Z";
   }
   // FastAPI/Pydantic 422 responses shape `detail` as an array of
   // {loc, msg, type} objects, e.g. [{"loc":["body","email"],"msg":"field
@@ -399,14 +417,16 @@
       if (!name) { state.appointmentFormError = "Please enter your name."; render(); return; }
       if (!isValidEmail(email)) { state.appointmentFormError = "Please enter a valid email address."; render(); return; }
       if (!phone) { state.appointmentFormError = "Please enter a valid US phone number, e.g. (555) 123-4567."; render(); return; }
-      if (!isFutureDateTime(when)) { state.appointmentFormError = "Please choose a date and time in the future."; render(); return; }
+      // The server is the sole authority on "future," using the tenant's
+      // own timezone (routers/public.py) - a naive browser-local check
+      // here could wrongly block a valid booking for a visitor outside
+      // the tenant's timezone, so this only catches an empty value.
+      if (!when) { state.appointmentFormError = "Please choose a date and time."; render(); return; }
 
       state.appointmentFormError = null;
       var parts = name.split(" ");
       var firstName = parts.shift() || "";
       var lastName = parts.join(" ");
-      var startAt = new Date(when);
-      var endAt = new Date(startAt.getTime() + APPOINTMENT_DURATION_MINUTES * 60 * 1000);
       var consentBox = document.getElementById("wgApptSmsConsent");
       var consentText = document.getElementById("wgApptSmsConsentText");
       var consentFields = consentBox ? { sms_consent: consentBox.checked, sms_consent_wording: consentText.textContent } : {};
@@ -416,9 +436,8 @@
         last_name: lastName || null,
         email: email,
         phone: phone,
-        start_at: startAt.toISOString(),
-        end_at: endAt.toISOString(),
-        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || null
+        start_at: wallClockIso(when, 0),
+        end_at: wallClockIso(when, APPOINTMENT_DURATION_MINUTES)
       };
       for (var f in consentFields) body[f] = consentFields[f];
       api("/api/v1/public/appointments", { method: "POST", body: body })

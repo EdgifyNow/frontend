@@ -89,6 +89,19 @@ button:disabled{opacity:.6;cursor:default}
     }).then(function(d){ token = d.session_token; });
   }
 
+  // Same convention as widget.js's wallClockIso - see that file's comment
+  // for why toISOString() here was the root cause of valid times getting
+  // rejected as outside business hours. Always produces a Z-suffixed
+  // (zero-offset) string; the backend schema now rejects any other offset.
+  function wallClockIso(when, addMinutes){
+    var m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?/.exec(when);
+    if (!m) return null;
+    var d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0)) + (addMinutes || 0) * 60000);
+    function pad(n){ return (n < 10 ? "0" : "") + n; }
+    return d.getUTCFullYear() + "-" + pad(d.getUTCMonth() + 1) + "-" + pad(d.getUTCDate()) + "T" +
+      pad(d.getUTCHours()) + ":" + pad(d.getUTCMinutes()) + ":" + pad(d.getUTCSeconds()) + "Z";
+  }
+
   form.addEventListener("submit", function(e){
     e.preventDefault();
     var name = document.getElementById("bkName").value.trim();
@@ -98,18 +111,16 @@ button:disabled{opacity:.6;cursor:default}
     if (!name) return show("Please enter your name.", "err");
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return show("Please enter a valid email address.", "err");
     if (!phone) return show("Please enter a valid US phone number, e.g. (555) 123-4567.", "err");
-    if (!when || new Date(when).getTime() <= Date.now()) return show("Please choose a date and time in the future.", "err");
+    if (!when) return show("Please choose a date and time.", "err");
 
     var parts = name.split(" ");
     var first = parts.shift() || "";
-    var start = new Date(when);
     var btn = document.getElementById("bkSubmit");
     btn.disabled = true; btn.textContent = "Sending...";
     bootstrap().then(function(){
       return call("/api/v1/public/appointments", { method: "POST", body: {
         first_name: first, last_name: parts.join(" ") || null, email: email, phone: phone,
-        start_at: start.toISOString(), end_at: new Date(start.getTime() + 30 * 60000).toISOString(),
-        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || null,
+        start_at: wallClockIso(when, 0), end_at: wallClockIso(when, 30),
         // What the customer ticked and the exact label they saw.
         sms_consent: document.getElementById("bkSmsConsent").checked,
         sms_consent_wording: document.getElementById("bkSmsConsentText").textContent.replace(/\s+/g, " ").trim()

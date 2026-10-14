@@ -12,6 +12,15 @@
   // environment without a code change.
   var SESSION_IDLE_TIMEOUT_MINUTES = (window.EDGIFY_CONFIG && window.EDGIFY_CONFIG.SESSION_IDLE_TIMEOUT_MINUTES) || 10;
   var idleTimer = null;
+  // Bumped by doLogout() (see below) so a request issued under one login
+  // that only resolves after that session has ended can be told apart
+  // from one issued under whoever is logged in now. Without this, an
+  // in-flight request from tenant A that resolves after logout/login as
+  // tenant B would still run its .then(function(d){ state.xxx = d; ... })
+  // against the CURRENT state object (JS closures capture the state
+  // variable binding, not a snapshot) - writing tenant A's data into
+  // tenant B's live session. See api() below.
+  var sessionGeneration = 0;
   var root = document.getElementById("egApp");
   function AND(){ for (var i=0;i<arguments.length;i++){ if(!arguments[i]) return false; } return true; }
 
@@ -26,7 +35,14 @@
     return !!(window.EDGIFY_CONFIG && window.EDGIFY_CONFIG.FEATURE_VOICE_WHATSAPP);
   }
 
-  var state = {
+  // A factory, not a plain object literal, so doLogout() below can rebuild
+  // the same shape from scratch - the bug this fixes: logging out only
+  // ever cleared a hand-picked subset of fields (leads/contacts/documents/
+  // assistants/tenants), so every other cached, tenant-scoped field
+  // (voiceSettings among them) survived into the next login in the same
+  // tab and got shown - and could get saved - under the wrong tenant.
+  function initialState(){
+    return {
     token: localStorage.getItem(TOKEN_KEY) || null,
     user: null,
     view: "dashboard",
@@ -67,6 +83,9 @@
     appointmentStatusFilter: "all",
     appointmentPage: 1,
     appointmentDrawerId: null,
+    newAppointmentDrawerOpen: false,
+    newAppointmentLeadQuery: "",
+    newAppointmentSelectedLeadId: null,
     widgetKey: undefined, // undefined = not fetched yet, null = fetched, none exists
     integrationConnections: null, // GET /integrations/connections - see googleCalendarConnection()
     widgetIdDraft: "",
@@ -107,7 +126,9 @@
     whatsappDrawerId: null,
     whatsappDrawerDetail: null,
     whatsappLastUpdated: null
-  };
+    };
+  }
+  var state = initialState();
 
   function esc(s){
     if (s === null || s === undefined) return "";
@@ -151,6 +172,34 @@
   function fmtTime(d){
     if (!d) return "-";
     try { return new Date(d).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }); } catch(e){ return d; }
+  }
+  // Appointment start_at/end_at are NOT genuine UTC instants like
+  // created_at/updated_at above - per the tenant wall-clock convention
+  // (see availability.py's module docstring and widget.js's wallClockIso),
+  // their digits already ARE the tenant's own local time, just tagged
+  // UTC by convention. fmtDate/fmtTime would re-interpret those digits
+  // through the *viewer's* browser timezone and shift them (e.g. a 4pm
+  // appointment rendering as 12pm to a viewer 4 hours behind) - passing
+  // timeZone:"UTC" makes toLocaleString/toLocaleTimeString print the
+  // digits as-is instead of converting them.
+  function fmtApptDateTime(d){
+    if (!d) return "-";
+    try { return new Date(d).toLocaleString([], { timeZone: "UTC" }); } catch(e){ return d; }
+  }
+  function fmtApptTime(d){
+    if (!d) return "-";
+    try { return new Date(d).toLocaleTimeString([], { timeZone: "UTC", hour: "numeric", minute: "2-digit" }); } catch(e){ return d; }
+  }
+  // Same wall-clock convention as fmtApptDateTime/fmtApptTime above - a
+  // datetime-local input wants "YYYY-MM-DDTHH:MM" with no trailing Z, and
+  // since start_at/end_at's digits already ARE the tenant's local time,
+  // this is a plain slice, not a timezone conversion. Shared by both
+  // appointmentDrawerHtml() (prefill) and bindAppointmentDrawer() (change
+  // detection on save), so it lives at module scope rather than nested
+  // inside just one of them.
+  function toLocalInputValue(iso){
+    if (!iso) return "";
+    return iso.slice(0, 16);
   }
   function contactName(c){
     if (!c) return "Unknown contact";
@@ -276,6 +325,7 @@
 
   function api(path, opts){
     opts = opts || {};
+    var requestGeneration = sessionGeneration;
     var headers = opts.headers || {};
     if (state.token) headers["Authorization"] = "Bearer " + state.token;
     var isForm = AND(typeof FormData !== "undefined", opts.body instanceof FormData);
@@ -283,7 +333,23 @@
     if (AND(!isForm, opts.body)) headers["Content-Type"] = "application/json";
     return fetch(API_BASE + path, { method: opts.method || "GET", headers: headers, body: opts.body })
       .then(function(res){
-        if (res.status === 401) {
+        if (requestGeneration !== sessionGeneration) {
+          // A logout happened while this request was in flight. Don't act
+          // on it at all - not as success (would write a stale tenant's
+          // data into whoever is logged in now) and not as a 401 failure
+          // either (the current session's token is probably fine; this
+          // response is just from the old one). Every caller chains
+          // .then(function(d){ state.xxx = d; render(); }), and there's no
+          // value that's safe to hand all of them - a promise that never
+          // settles means that callback simply never runs.
+          return new Promise(function(){});
+        }
+        // keepSessionOn401: a 401 normally means the login token expired,
+        // so everything else logs out. change-password is the exception -
+        // a wrong *current password* can also come back as a 401, and
+        // logging the owner out for a typo would be wrong. That caller
+        // checks /auth/me itself to tell the two apart.
+        if (res.status === 401 && !opts.keepSessionOn401) {
           doLogout();
           var e = new Error("Session expired. Please log in again.");
           throw e;
@@ -294,9 +360,22 @@
           if (!res.ok) {
             var msg = "Request failed (" + res.status + ")";
             if (data ? data.detail : false) {
-              msg = typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail);
+              if (typeof data.detail === "string") {
+                msg = data.detail;
+              } else if (Array.isArray(data.detail)) {
+                // FastAPI validation errors: [{loc:["body","new_password"], msg:"..."}]
+                // - show the human sentence, not the raw JSON.
+                msg = data.detail.map(function(d){
+                  var field = d && d.loc && d.loc.length ? String(d.loc[d.loc.length - 1]).replace(/_/g, " ") : "";
+                  return (field ? field + ": " : "") + ((d && d.msg) || JSON.stringify(d));
+                }).join("; ");
+              } else {
+                msg = JSON.stringify(data.detail);
+              }
             }
-            throw new Error(msg);
+            var err = new Error(msg);
+            err.status = res.status;
+            throw err;
           }
           return data;
         });
@@ -310,11 +389,26 @@
   }
 
   function doLogout(){
-    state.token = null;
-    state.user = null;
     localStorage.removeItem(TOKEN_KEY);
-    state.leads = state.contacts = state.documents = state.assistants = state.tenants = null;
-    state.view = "dashboard";
+    // Must run before state is reassigned below: stopChannelAutoRefresh()
+    // clears setInterval(...) via state._channelRefreshTimer, a runtime-only
+    // field that isn't part of initialState()'s literal. Clearing it after
+    // the reassignment would check the field on the brand-new object (always
+    // empty) and silently fail to find the real interval id, which still
+    // lives on the old, about-to-be-discarded state object - orphaning a
+    // 7-second poll that runs forever, re-rendering the whole page (and
+    // wiping an in-progress, unsaved input's typed text) regardless of which
+    // tenant is now logged in or which screen they're on.
+    stopChannelAutoRefresh();
+    // Rebuild from the same factory used on first load (see initialState()
+    // above) instead of hand-clearing a few fields, so nothing cached for
+    // this tenant can leak into whichever tenant logs in next in this tab.
+    state = initialState();
+    state.booting = false;
+    // Invalidates any request still in flight from the session that just
+    // ended - see api()'s requestGeneration check and sessionGeneration's
+    // own comment above.
+    sessionGeneration++;
     stopIdleTimer();
     render();
   }
@@ -663,7 +757,7 @@
       '</div>' +
       '<div id="egContent"></div>' +
       '</main>' +
-      '</div>' + toastHtml + leadDrawerHtml() + contactDrawerHtml() + appointmentDrawerHtml() + voiceDrawerHtml() + whatsappDrawerHtml();
+      '</div>' + toastHtml + leadDrawerHtml() + contactDrawerHtml() + appointmentDrawerHtml() + newAppointmentDrawerHtml() + voiceDrawerHtml() + whatsappDrawerHtml();
 
     document.querySelectorAll("[data-nav]").forEach(function(el){
       el.addEventListener("click", function(){
@@ -675,6 +769,7 @@
     bindDrawer();
     bindContactDrawer();
     bindAppointmentDrawer();
+    bindNewAppointmentDrawer();
     bindAllChannelDrawers();
 
     renderContent();
@@ -1182,11 +1277,12 @@
     var filtered = filteredAppointments();
     var page = paginate(filtered, state.appointmentPage);
     var rows = page.pageItems.map(function(a){
-      // fmtDate/fmtTime never touch user input, and the "-" separator is
-      // plain text, not markup - safe to drop straight into the row
-      // without esc() (which would otherwise double-escape the &ndash;
-      // entity used elsewhere and print it literally instead of a dash).
-      var when = fmtDate(a.start_at) + (a.end_at ? " – " + fmtTime(a.end_at) : "");
+      // fmtApptDateTime/fmtApptTime never touch user input, and the "-"
+      // separator is plain text, not markup - safe to drop straight into
+      // the row without esc() (which would otherwise double-escape the
+      // &ndash; entity used elsewhere and print it literally instead of a
+      // dash).
+      var when = fmtApptDateTime(a.start_at) + (a.end_at ? " – " + fmtApptTime(a.end_at) : "");
       var where = a.meeting_url ? "Video call" : (a.location || "-");
       return '<tr class="eg-clickrow" style="cursor:pointer" data-appointment-drawer="' + esc(a.id) + '">' +
         '<td><b>' + esc(contactName(a.contact)) + '</b></td>' +
@@ -1200,23 +1296,31 @@
       '<div class="eg-toolbar">' +
       '<input id="egAppointmentSearch" placeholder="Search by contact, email, phone..." value="' + esc(state.appointmentSearch) + '" />' +
       '<select id="egAppointmentStatusFilter">' + selOpts(["all"].concat(APPT_STATUS_OPTIONS).map(function(s){ return { value: s, label: s === "all" ? "All Statuses" : appointmentStatusLabel(s) }; }), state.appointmentStatusFilter) + '</select>' +
+      '<button class="eg-btn" id="egNewAppointmentBtn">+ New Appointment</button>' +
       '</div>' +
       (rows ? '<table class="eg-table"><thead><tr><th>Contact</th><th>When</th><th>Status</th><th>Location</th><th>Booked</th><th>Actions</th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div class="eg-empty">' + (state.appointmentSearch ? "No matching appointments." : "No appointments yet.") + '</div>') +
       pagerHtml("egAppointment", page, "appointments") +
       '</div>';
   }
+  // The edit drawer can be opened from the Appointments tab (every
+  // appointment, in state.allAppointments) or from inside a lead's own
+  // drawer (just that lead's, in state.leadAppointments) - look in both.
+  // Appointments from the lead drawer don't carry the contact the way the
+  // merged list does, so attach it from the lead.
+  function findAppointment(id){
+    var a = (state.allAppointments || []).filter(function(x){ return x.id === id; })[0]
+      || (state.leadAppointments || []).filter(function(x){ return x.id === id; })[0];
+    if (!a) return null;
+    if (a.contact) return a;
+    var copy = {}; for (var k in a) copy[k] = a[k];
+    var lead = joinedLeads().filter(function(l){ return l.id === a.lead_id; })[0];
+    copy.contact = lead ? lead.contact : null;
+    return copy;
+  }
   function appointmentDrawerHtml(){
     if (!state.appointmentDrawerId) return "";
-    var a = (state.allAppointments || []).filter(function(x){ return x.id === state.appointmentDrawerId; })[0];
+    var a = findAppointment(state.appointmentDrawerId);
     if (!a) return "";
-    // start_at/end_at come back as UTC ISO strings; a datetime-local input
-    // needs local wall-clock time with no trailing Z, hence the slice.
-    function toLocalInputValue(iso){
-      if (!iso) return "";
-      var d = new Date(iso);
-      d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
-      return d.toISOString().slice(0, 16);
-    }
     var statusSelect = '<select class="eg-select" id="egApptDrawerStatus">' + APPT_STATUS_OPTIONS.map(function(s){
       return '<option value="' + s + '"' + (s === a.status ? " selected" : "") + '>' + appointmentStatusLabel(s) + '</option>';
     }).join("") + '</select>';
@@ -1245,14 +1349,20 @@
     var saveBtn = document.getElementById("egApptDrawerSave");
     if (saveBtn) saveBtn.addEventListener("click", function(){
       var id = state.appointmentDrawerId;
-      var original = (state.allAppointments || []).filter(function(a){ return a.id === id; })[0] || {};
+      var original = findAppointment(id) || {};
       var startVal = document.getElementById("egApptDrawerStart").value;
       var endVal = document.getElementById("egApptDrawerEnd").value;
-      // datetime-local has no timezone of its own - new Date() on it is
-      // parsed in the browser's local zone, and toISOString() converts
-      // that to UTC for the API, matching what start_at/end_at came in as.
-      var newStartAt = startVal ? new Date(startVal).toISOString() : null;
-      var newEndAt = endVal ? new Date(endVal).toISOString() : null;
+      // datetime-local gives "YYYY-MM-DDTHH:MM" with no timezone of its
+      // own - those digits already ARE the tenant's wall-clock time (see
+      // toLocalInputValue above), so appending ":00Z" tags them the same
+      // way the backend does. Parsing via new Date(startVal).toISOString()
+      // used to read them in the browser's own timezone and convert to a
+      // different real UTC instant - the same mistake the booking widget
+      // made before its timezone fix (see widget.js's wallClockIso) -
+      // silently corrupting the saved time whenever the admin's browser
+      // timezone didn't match the tenant's configured one.
+      var newStartAt = startVal ? startVal + ":00Z" : null;
+      var newEndAt = endVal ? endVal + ":00Z" : null;
       var newMeetingUrl = document.getElementById("egApptDrawerMeetingUrl").value.trim() || null;
       var newNotes = document.getElementById("egApptDrawerNotes").value.trim() || null;
       var newStatus = document.getElementById("egApptDrawerStatus").value;
@@ -1266,25 +1376,172 @@
       // backend separately - this is a workaround, not a real fix.
       var body = {};
       if (newStatus !== original.status) body.status = newStatus;
-      if (newStartAt !== (original.start_at ? new Date(original.start_at).toISOString() : null)) body.start_at = newStartAt;
-      if (newEndAt !== (original.end_at ? new Date(original.end_at).toISOString() : null)) body.end_at = newEndAt;
+      if (newStartAt !== (original.start_at ? toLocalInputValue(original.start_at) + ":00Z" : null)) body.start_at = newStartAt;
+      if (newEndAt !== (original.end_at ? toLocalInputValue(original.end_at) + ":00Z" : null)) body.end_at = newEndAt;
       if (newMeetingUrl !== (original.meeting_url || null)) body.meeting_url = newMeetingUrl;
       if (newNotes !== (original.notes || null)) body.notes = newNotes;
       if (!Object.keys(body).length) { state.appointmentDrawerId = null; render(); return; }
       saveBtn.disabled = true; saveBtn.textContent = "Saving...";
       api("/api/v1/crm/appointments/" + id, { method: "PATCH", body: body })
         .then(function(updated){
-          state.allAppointments = (state.allAppointments || []).map(function(a){
-            if (a.id !== updated.id) return a;
-            var copy = {}; for (var k in a) copy[k] = a[k];
-            for (var k2 in updated) copy[k2] = updated[k2];
-            return copy;
-          });
+          // Patch the saved copy into whichever lists are loaded - but
+          // leave a list that was never fetched as null, not [], or the
+          // Appointments tab would claim "No appointments yet".
+          var mergeInto = function(list){
+            return list.map(function(a){
+              if (a.id !== updated.id) return a;
+              var copy = {}; for (var k in a) copy[k] = a[k];
+              for (var k2 in updated) copy[k2] = updated[k2];
+              return copy;
+            });
+          };
+          if (state.allAppointments) state.allAppointments = mergeInto(state.allAppointments);
+          if (state.leadAppointments) state.leadAppointments = mergeInto(state.leadAppointments);
           showToast("Appointment updated");
           state.appointmentDrawerId = null;
           render();
         })
         .catch(function(err){ showToast(err.message, true); saveBtn.disabled = false; saveBtn.textContent = "Save Changes"; });
+    });
+  }
+
+  // ---- New Appointment (create, not edit) - the Appointments screen had
+  // no way to book one at all, only edit an existing one. Reuses the same
+  // POST .../leads/{lead_id}/appointments endpoint the lead drawer's own
+  // appointment flows already use, and the same wall-clock datetime-local
+  // handling as the edit drawer above - no new backend work, no new
+  // timezone logic, just the missing entry point.
+  function newAppointmentDrawerHtml(){
+    if (!state.newAppointmentDrawerOpen) return "";
+    var q = (state.newAppointmentLeadQuery || "").toLowerCase().trim();
+    var candidates = q ? joinedLeads().filter(function(r){
+      var c = r.contact || {};
+      var text = [contactName(c), c.email, c.phone, r.service_interest, r.title].filter(Boolean).join(" ").toLowerCase();
+      return text.indexOf(q) !== -1;
+    }).slice(0, 8) : [];
+    var selected = state.newAppointmentSelectedLeadId
+      ? joinedLeads().filter(function(r){ return r.id === state.newAppointmentSelectedLeadId; })[0]
+      : null;
+
+    var pickerHtml = selected
+      ? '<div class="eg-statusbox" style="margin-bottom:10px">' +
+          '<b>' + esc(contactName(selected.contact)) + '</b>' +
+          '<div class="eg-small eg-muted">' + esc((selected.contact && (selected.contact.phone || selected.contact.email)) || "") + '</div>' +
+          '<button class="eg-btn ghost small" id="egNewApptChangeLead" style="margin-top:6px">Change</button>' +
+        '</div>'
+      : '<div class="eg-form-row"><label>Lead</label>' +
+          '<input class="eg-input" id="egNewApptLeadSearch" placeholder="Search by name, email, or phone..." value="' + esc(state.newAppointmentLeadQuery) + '" autocomplete="off" />' +
+          (q
+            ? (candidates.length
+                ? '<div style="margin-top:6px">' + candidates.map(function(r){
+                    return '<div class="eg-clickrow" data-pick-lead="' + esc(r.id) + '" style="padding:8px;cursor:pointer;border:1px solid #e3e3e3;border-radius:6px;margin-top:4px">' +
+                      '<b>' + esc(contactName(r.contact)) + '</b> <span class="eg-small eg-muted">' + esc((r.contact && (r.contact.phone || r.contact.email)) || "") + '</span></div>';
+                  }).join("") + '</div>'
+                : '<div class="eg-small eg-muted" style="margin-top:6px">No matching leads.</div>')
+            : '') +
+        '</div>';
+
+    return '<div class="eg-drawer-backdrop open" id="egNewApptDrawerBackdrop"></div>' +
+      '<aside class="eg-drawer open">' +
+      '<button class="eg-drawer-close" id="egNewApptDrawerClose" aria-label="Close">&times;</button>' +
+      '<h2>New Appointment</h2>' +
+      '<div class="eg-drawer-sub">Book an appointment for an existing lead</div>' +
+      pickerHtml +
+      '<div class="eg-form-row"><label>Start</label><input class="eg-input" type="datetime-local" id="egNewApptStart" /></div>' +
+      '<div class="eg-form-row"><label>End <span class="eg-small eg-muted">(optional)</span></label><input class="eg-input" type="datetime-local" id="egNewApptEnd" /></div>' +
+      '<div class="eg-form-row"><label>Meeting URL <span class="eg-small eg-muted">(optional)</span></label><input class="eg-input" id="egNewApptMeetingUrl" placeholder="https://..." /></div>' +
+      '<div class="eg-form-row"><label>Notes</label><textarea class="eg-textarea" id="egNewApptNotes" style="min-height:70px"></textarea></div>' +
+      '<button class="eg-btn" id="egNewApptCreate"' + (selected ? "" : " disabled") + '>Create Appointment</button>' +
+      '</aside>';
+  }
+  function closeNewApptDrawer(){
+    state.newAppointmentDrawerOpen = false;
+    state.newAppointmentLeadQuery = "";
+    state.newAppointmentSelectedLeadId = null;
+    render();
+  }
+  function bindNewAppointmentDrawer(){
+    if (!state.newAppointmentDrawerOpen) return;
+
+    var backdrop = document.getElementById("egNewApptDrawerBackdrop");
+    if (backdrop) backdrop.addEventListener("click", closeNewApptDrawer);
+    var closeBtn = document.getElementById("egNewApptDrawerClose");
+    if (closeBtn) closeBtn.addEventListener("click", closeNewApptDrawer);
+
+    var search = document.getElementById("egNewApptLeadSearch");
+    if (search) search.addEventListener("input", function(){
+      preserveFocus(function(){ state.newAppointmentLeadQuery = search.value; render(); });
+    });
+    document.querySelectorAll("[data-pick-lead]").forEach(function(el){
+      el.addEventListener("click", function(){
+        state.newAppointmentSelectedLeadId = el.getAttribute("data-pick-lead");
+        render();
+      });
+    });
+    var changeBtn = document.getElementById("egNewApptChangeLead");
+    if (changeBtn) changeBtn.addEventListener("click", function(){
+      state.newAppointmentSelectedLeadId = null;
+      state.newAppointmentLeadQuery = "";
+      render();
+    });
+
+    var createBtn = document.getElementById("egNewApptCreate");
+    if (createBtn) createBtn.addEventListener("click", function(){
+      var leadId = state.newAppointmentSelectedLeadId;
+      if (!leadId) return;
+      var startVal = document.getElementById("egNewApptStart").value;
+      if (!startVal) { showToast("Please choose a start time", true); return; }
+      var endVal = document.getElementById("egNewApptEnd").value;
+      // Same wall-clock convention as the edit drawer: the datetime-local
+      // value's digits already ARE the tenant's local time, so ":00Z" just
+      // tags them the same way the backend does - no new Date()/
+      // toISOString() conversion, which would shift them. The tenant's
+      // own configured zone is sent explicitly rather than left for the
+      // backend to default, closing the same gap already flagged for the
+      // CRM appointment-creation endpoint (it has no server-side fallback
+      // the way the public booking endpoint does).
+      var body = {
+        start_at: startVal + ":00Z",
+        end_at: endVal ? endVal + ":00Z" : null,
+        meeting_url: document.getElementById("egNewApptMeetingUrl").value.trim() || null,
+        notes: document.getElementById("egNewApptNotes").value.trim() || null,
+        timezone: (state.tenantSelf && state.tenantSelf.voice_timezone) || null
+      };
+      createBtn.disabled = true; createBtn.textContent = "Creating...";
+      api("/api/v1/crm/leads/" + leadId + "/appointments", { method: "POST", body: body })
+        .then(function(created){
+          // The create response has no .contact/.lead - every other entry
+          // in allAppointments gets those attached client-side (see
+          // ensureAllAppointments), so this matches that same shape
+          // instead of showing "Unknown contact" until the next reload.
+          var lead = (state.leads || []).filter(function(l){ return l.id === leadId; })[0] || null;
+          var copy = {};
+          for (var k in created) copy[k] = created[k];
+          copy.lead = lead;
+          copy.contact = lead ? (contactMapFromState()[lead.contact_id] || null) : null;
+          // This drawer is also opened from inside a lead's own drawer, in
+          // which case the Appointments tab was never loaded - leave it
+          // null (it fetches everything itself when opened) rather than
+          // turning it into a one-item list.
+          if (state.allAppointments) {
+            state.allAppointments = state.allAppointments.concat([copy]).sort(function(x, y){
+              return new Date(x.start_at) - new Date(y.start_at);
+            });
+          }
+          // If that lead's drawer is open underneath, show the new
+          // appointment there, and refresh leads (a booking can clear a
+          // lead's "needs manual scheduling" flag).
+          if (state.leadDrawerId === leadId) {
+            api("/api/v1/crm/leads/" + leadId + "/appointments").then(function(d){ state.leadAppointments = d; render(); }).catch(function(){});
+          }
+          ensureLeads();
+          showToast("Appointment created");
+          closeNewApptDrawer();
+        })
+        .catch(function(err){
+          showToast(err.message, true);
+          createBtn.disabled = false; createBtn.textContent = "Create Appointment";
+        });
     });
   }
 
@@ -1339,6 +1596,12 @@
     });
     var appointmentStatusFilter = document.getElementById("egAppointmentStatusFilter");
     if (appointmentStatusFilter) appointmentStatusFilter.addEventListener("change", function(){ state.appointmentStatusFilter = appointmentStatusFilter.value; state.appointmentPage = 1; render(); });
+    // Lives in appointmentsTabHtml()'s own output (tab content bound here,
+    // same as the search/filter above it) - not in the drawer HTML itself,
+    // which is why this can't be bound from bindNewAppointmentDrawer()
+    // (that runs against the outer shell, before #egContent exists).
+    var newApptBtn = document.getElementById("egNewAppointmentBtn");
+    if (newApptBtn) newApptBtn.addEventListener("click", function(){ state.newAppointmentDrawerOpen = true; render(); });
     bindPager("egLead", "leadPage");
     bindPager("egContact", "contactPage");
     bindPager("egAppointment", "appointmentPage");
@@ -1987,7 +2250,7 @@
     var body = rows.length === 0
       ? '<div class="eg-small eg-muted">No SMS reminders sent yet.</div>'
       : rows.map(function(r){
-          var when = r.appointment_start_at ? fmtDate(r.appointment_start_at) : "-";
+          var when = r.appointment_start_at ? fmtApptDateTime(r.appointment_start_at) : "-";
           var who = (r.contact_name || "Unknown") + (r.contact_phone ? " (" + r.contact_phone + ")" : "");
           var statusColor = STATUS_COLOR[r.delivery_status] || STATUS_COLOR[r.status] || "#374151";
           return '<div class="eg-row" style="gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px solid #eee">' +
@@ -2069,7 +2332,7 @@
         '<div class="eg-kv"><span>Connection</span><b>' + (c.coexistence ? "Coexistence" : "Direct") + '</b></div>' +
         (c.token_expires_at ? '<div class="eg-kv"><span>Token expires</span><b>' + fmtDate(c.token_expires_at) + '</b></div>' : "") +
         '<div style="display:flex;gap:10px;margin-top:10px">' +
-        '<button class="eg-btn ghost" id="egWhatsappReconnect"' + (c.app_id ? "" : " disabled") + '>Reconnect</button>' +
+        '<button class="eg-btn ghost" id="egWhatsappReconnect"' + ((c.app_id && !state.whatsappSignupInProgress && !state.whatsappConnecting) ? "" : " disabled") + '>Reconnect</button>' +
         '<button class="eg-btn danger" id="egWhatsappDisconnect">Disconnect</button>' +
         '</div></div>';
     }
@@ -2078,26 +2341,65 @@
       '<div class="eg-row"><h3>WhatsApp Connection</h3><span class="eg-pill">Not Connected</span></div>' +
       '<p class="eg-small eg-muted" style="margin-top:-6px">Connect your existing WhatsApp Business number. You can continue using the WhatsApp Business app.</p>' +
       (c.app_id
-        ? '<button class="eg-btn" id="egWhatsappConnect"' + (state.whatsappConnecting ? " disabled" : "") + '>' + (state.whatsappConnecting ? "Connecting..." : "Connect WhatsApp") + '</button>'
+        ? '<button class="eg-btn" id="egWhatsappConnect"' + ((state.whatsappConnecting || state.whatsappSignupInProgress) ? " disabled" : "") + '>' + ((state.whatsappConnecting || state.whatsappSignupInProgress) ? "Connecting..." : "Connect WhatsApp") + '</button>'
         : '<div class="eg-small eg-muted">WhatsApp connection isn\'t configured on this server yet (missing Meta app id).</div>') +
       '</div>';
   }
 
-  function completeWhatsappEmbeddedSignup(code, wabaId, phoneNumberId, displayPhoneNumber){
+  function completeWhatsappEmbeddedSignup(code, wabaId, phoneNumberId, displayPhoneNumber, isCoexistence){
     state.whatsappConnecting = true;
     render();
     api("/api/v1/integrations/whatsapp/embedded-signup/complete", {
       method: "POST",
-      body: { code: code, waba_id: wabaId, phone_number_id: phoneNumberId, display_phone_number: displayPhoneNumber }
-    }).then(function(d){
-      state.whatsappConnection = Object.assign({}, state.whatsappConnection, d);
+      // phone_number_id is optional as of backend rc71 - Meta's documented
+      // coexistence completion event (FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING)
+      // can omit it entirely, and the backend now looks it up itself from
+      // the WABA when that happens. is_coexistence is the frontend's own
+      // read of which FINISH event actually fired (see launchWhatsappEmbeddedSignup),
+      // which the backend needs to decide whether phone registration should
+      // be skipped - see the schema's own docstring for why.
+      body: { code: code, waba_id: wabaId, phone_number_id: phoneNumberId || null, display_phone_number: displayPhoneNumber, is_coexistence: !!isCoexistence }
+    }).then(function(){
+      // "Connecting" deliberately stays active through this follow-up
+      // read - Connected must never be shown on the strength of the POST
+      // alone, only once a fresh status fetch independently confirms it.
+      return api("/api/v1/integrations/whatsapp/status");
+    }).then(function(status){
       state.whatsappConnecting = false;
       state.whatsappSignupInProgress = false;
-      showToast("WhatsApp connected");
+      // launchWhatsappEmbeddedSignup's settle() only resumes the idle
+      // timer on its own give-up path, not here - stopIdleTimer() was
+      // called when the popup launched and nothing else guarantees this
+      // resumes right when the backend call actually finishes, rather
+      // than opportunistically whenever the user next happens to move
+      // the mouse (resetIdleTimer's own activity-listener guard only
+      // blocks on whatsappSignupInProgress, which is already false by
+      // the time this runs - but "eventually, on next interaction" isn't
+      // the same as "now that this attempt is actually over").
+      resetIdleTimer();
+      state.whatsappConnection = Object.assign({}, state.whatsappConnection, status);
+      if (status && status.connected) {
+        showToast("WhatsApp connected");
+      } else {
+        // The POST succeeded but a fresh read doesn't show it as
+        // connected yet - never claim success here; say so plainly
+        // instead of silently treating a non-connected read as done.
+        showToast("WhatsApp setup finished, but the connection isn't showing as active yet. Please refresh, or try Reconnect.", true);
+      }
       render();
     }).catch(function(err){
       state.whatsappConnecting = false;
       state.whatsappSignupInProgress = false;
+      // Same reasoning as the success branch above - resume deterministically
+      // now that this attempt is over, not only whenever the user next moves
+      // the mouse. A cleared state.token (handled just below) makes this a
+      // no-op via resetIdleTimer's own "if (!state.token)" guard, which is
+      // correct - there's no session left to keep alive.
+      resetIdleTimer();
+      // Covers both the POST and the follow-up status GET failing - either
+      // way this is not success, and the real error is shown, never
+      // silently swallowed or mistaken for a connected state.
+      //
       // A session that expired or was otherwise invalidated during the
       // popup leaves state.token cleared by api()'s own 401 handling
       // (or, for a stale token with no Authorization header at all, a
@@ -2114,35 +2416,162 @@
     });
   }
 
+  // Diagnostic-only logging for a reported bug: Meta's own popup reaches
+  // "Finish" but the portal still shows "cancelled or didn't complete", and
+  // no backend request is seen. This never logs event.data, a code, or a
+  // token - only booleans/short strings/timestamps - so it's safe to ship
+  // ahead of a behavior fix and capture exactly one real attempt. Remove
+  // once the real cause (likely the coexistence completion event using a
+  // different event name - see parsedEvent below) is confirmed and fixed.
+  function logWhatsappSignupDiagnostic(stage, fields){
+    try { console.log("[whatsapp-embedded-signup] " + stage, Object.assign({ t: Date.now() }, fields)); } catch(e) {}
+  }
+
+  // How long to wait for a late session-info message once the SDK login
+  // callback has already fired with a real code - the message and the SDK
+  // callback are two independent async events with no guaranteed order
+  // (confirmed cause of a real production failure: Meta's own popup
+  // reached Finish, but the callback fired before the message had been
+  // processed, so a successful connection was discarded as "cancelled").
+  var WHATSAPP_SIGNUP_SESSION_INFO_WAIT_MS = 1500;
+  var WHATSAPP_SIGNUP_SESSION_INFO_POLL_MS = 100;
+  // Meta's documented completion event names only - an explicit allowlist
+  // rather than a "FINISH" prefix match, so an undocumented future event
+  // name can't be silently treated as a successful completion.
+  var WHATSAPP_SIGNUP_FINISH_EVENTS = [
+    "FINISH", "FINISH_ONLY_WABA", "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING",
+    "FINISH_OBO_MIGRATION", "FINISH_GRANT_ONLY_API_ACCESS"
+  ];
+
   function launchWhatsappEmbeddedSignup(){
     var c = state.whatsappConnection;
-    if (!c || !c.app_id) return;
+    // Also guards against a second popup/listener pair while one is
+    // already open - the Connect/Reconnect buttons disable themselves
+    // for the same reason (see whatsappConnectPanelHtml), this is the
+    // belt-and-suspenders check in case either is clicked before a
+    // re-render reflects that. whatsappConnecting matters here too: once
+    // the Meta popup itself finishes, settle() clears whatsappSignupInProgress
+    // right away and hands off to completeWhatsappEmbeddedSignup, which
+    // keeps whatsappConnecting true through its own POST + status GET -
+    // without checking it here too, a click during that window could start
+    // a second, concurrent signup attempt.
+    if (!c || !c.app_id || state.whatsappSignupInProgress || state.whatsappConnecting) return;
 
     state.whatsappSignupInProgress = true;
     stopIdleTimer();
+    render();
 
     var sessionInfo = null;
+    // Meta's documented FINISH-family event names: FINISH (ordinary
+    // signup), FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING (coexistence - the
+    // flow this panel actually requests via featureType below, and the
+    // one a production incident showed being silently ignored because
+    // only literal "FINISH" was ever matched), FINISH_ONLY_WABA,
+    // FINISH_OBO_MIGRATION, FINISH_GRANT_ONLY_API_ACCESS. Only the
+    // coexistence one skips phone registration backend side - that's
+    // exactly what finishEvent exists to tell the backend.
+    var finishEvent = null;
+    var pollTimer = null;
+    // Every exit from this attempt - a real completion, giving up, a late
+    // arrival of either - funnels through settle() exactly once. Without
+    // this, CANCEL/ERROR arriving when FB.login's own callback never
+    // fires at all (not guaranteed on every Meta-side cancel/error path)
+    // had nothing to react to it, and a callback that fired AFTER an
+    // earlier give-up (e.g. after CANCEL already settled this attempt)
+    // would submit a second request and show a second toast.
+    var settled = false;
+
+    function settle(kind, code){
+      if (settled) return;
+      settled = true;
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+      window.removeEventListener("message", messageListener);
+      state.whatsappSignupInProgress = false;
+      if (kind === "finish") {
+        completeWhatsappEmbeddedSignup(
+          code, sessionInfo.waba_id, sessionInfo.phone_number_id || null,
+          sessionInfo.display_phone_number || null, finishEvent === "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING"
+        );
+        return;
+      }
+      resetIdleTimer();
+      showToast("WhatsApp connection was cancelled or didn't complete", true);
+      render();
+    }
+
     var messageListener = function(event){
+      // Meta's own reference listener wraps JSON.parse in a bare try/catch
+      // and falls back to the raw value, implying event.data isn't always
+      // a JSON string - parse defensively so the diagnostic fields below,
+      // and the real event-name match, are accurate for either shape.
+      var raw = event && event.data;
+      var payload = null;
+      var parsed = false;
+      if (raw && typeof raw === "object") { payload = raw; parsed = true; }
+      else if (typeof raw === "string") {
+        try { payload = JSON.parse(raw); parsed = true; } catch(e) { parsed = false; }
+      }
+      var inner = (payload && typeof payload === "object" && payload.data) || {};
+      var eventName = (payload && typeof payload.event === "string") ? payload.event : null;
+      logWhatsappSignupDiagnostic("message", {
+        origin: event && event.origin,
+        parsed: parsed,
+        type: (payload && typeof payload.type === "string") ? payload.type : null,
+        event: eventName,
+        hasWaba: !!inner.waba_id,
+        hasPhone: !!inner.phone_number_id
+      });
+
+      // Strict exact-match origin allowlist - unchanged, not widened.
       if (event.origin !== "https://www.facebook.com" && event.origin !== "https://web.facebook.com") return;
-      var data;
-      try { data = JSON.parse(event.data); } catch(e) { return; }
-      if (data && data.type === "WA_EMBEDDED_SIGNUP" && data.event === "FINISH") {
-        sessionInfo = data.data || {};
+      if (!payload || payload.type !== "WA_EMBEDDED_SIGNUP" || !eventName) return;
+      if (WHATSAPP_SIGNUP_FINISH_EVENTS.indexOf(eventName) !== -1) {
+        sessionInfo = inner;
+        finishEvent = eventName;
+        // The poll loop below (if the SDK callback already fired and is
+        // waiting) picks this up on its next tick; if the callback hasn't
+        // fired yet, there's nothing to finish yet - only the callback
+        // carries the authorization code this still needs.
+      } else if (eventName === "CANCEL" || eventName === "ERROR") {
+        // Must terminate right here, not just record it for later - the
+        // SDK's own login callback is not guaranteed to fire on every
+        // cancel/error path, so waiting for it could hang indefinitely.
+        settle("giveup");
       }
     };
     window.addEventListener("message", messageListener);
 
     loadFacebookSdk(function(){
       window.FB.login(function(response){
-        window.removeEventListener("message", messageListener);
+        // A CANCEL/ERROR message (or an earlier give-up) may have already
+        // settled this attempt before Meta's own SDK gets around to
+        // invoking this callback - settle() is a no-op by then, this just
+        // makes that visible in the diagnostic log.
+        logWhatsappSignupDiagnostic("sdk-callback", { alreadySettled: settled });
+        if (settled) return;
+
         var code = response && response.authResponse && response.authResponse.code;
-        if (!code || !sessionInfo || !sessionInfo.waba_id || !sessionInfo.phone_number_id) {
-          state.whatsappSignupInProgress = false;
-          resetIdleTimer();
-          showToast("WhatsApp connection was cancelled or didn't complete", true);
-          return;
-        }
-        completeWhatsappEmbeddedSignup(code, sessionInfo.waba_id, sessionInfo.phone_number_id, sessionInfo.display_phone_number || null);
+        logWhatsappSignupDiagnostic("sdk-callback-detail", {
+          hasCode: !!code,
+          hasSessionInfo: !!(sessionInfo && sessionInfo.waba_id),
+          finishEvent: finishEvent
+        });
+
+        // phone_number_id is deliberately not required here - Meta's
+        // documented coexistence payload only ever includes waba_id, and
+        // the backend (rc71+) looks the phone number up itself when it's
+        // missing. waba_id is still required: nothing can be completed
+        // without it.
+        if (!code) { settle("giveup"); return; }
+        if (sessionInfo && sessionInfo.waba_id) { settle("finish", code); return; }
+
+        var waited = 0;
+        pollTimer = setInterval(function(){
+          if (settled) { clearInterval(pollTimer); pollTimer = null; return; } // safety net; settle() already clears this itself too
+          waited += WHATSAPP_SIGNUP_SESSION_INFO_POLL_MS;
+          if (sessionInfo && sessionInfo.waba_id) { settle("finish", code); return; }
+          if (waited >= WHATSAPP_SIGNUP_SESSION_INFO_WAIT_MS) { settle("giveup"); }
+        }, WHATSAPP_SIGNUP_SESSION_INFO_POLL_MS);
       }, {
         config_id: c.config_id,
         response_type: "code",
@@ -2230,6 +2659,7 @@
       '<div class="eg-form-row"><label>Notes</label><textarea class="eg-textarea" id="egDrawerNotes" style="min-height:80px">' + esc(r.notes || "") + '</textarea></div>' +
       '<button class="eg-btn" id="egDrawerSaveStatus">Save Changes</button>' +
       '<h4>Appointments</h4>' +
+      '<button class="eg-btn ghost" id="egLeadBookBtn" style="margin-bottom:10px">+ Book a Meeting</button>' +
       appointmentsHtml() +
       '</aside>';
   }
@@ -2279,13 +2709,14 @@
       var opts = apptStatusOptions.map(function(s){
         return '<option value="' + s + '"' + (s === a.status ? " selected" : "") + '>' + esc(s.replace("_", " ")) + '</option>';
       }).join("");
-      var when = fmtDate(a.start_at) + (a.end_at ? " &ndash; " + new Date(a.end_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "");
+      var when = fmtApptDateTime(a.start_at) + (a.end_at ? " &ndash; " + fmtApptTime(a.end_at) : "");
       var where = a.meeting_url ? '<a href="' + esc(a.meeting_url) + '" target="_blank" rel="noopener">Meeting link</a>' : (a.location ? esc(a.location) : "");
       return '<div class="eg-statusbox" style="margin-bottom:10px">' +
         '<b>' + when + '</b>' +
         (where ? '<div class="eg-small eg-muted" style="margin-top:2px">' + where + '</div>' : "") +
         (a.notes ? '<div class="eg-small" style="margin-top:6px">' + esc(a.notes) + '</div>' : "") +
-        '<div style="margin-top:8px"><select class="eg-select" style="padding:6px 8px;font-size:12px;width:auto" data-appt-status="' + esc(a.id) + '">' + opts + '</select></div>' +
+        '<div style="margin-top:8px;display:flex;gap:8px;align-items:center"><select class="eg-select" style="padding:6px 8px;font-size:12px;width:auto" data-appt-status="' + esc(a.id) + '">' + opts + '</select>' +
+        '<button class="eg-btn ghost" style="padding:5px 10px;font-size:12px" data-appt-edit="' + esc(a.id) + '">Edit / Reschedule</button></div>' +
         '</div>';
     }).join("");
   }
@@ -2322,6 +2753,18 @@
           render();
         })
         .catch(function(err){ showToast(err.message, true); saveBtn.disabled = false; saveBtn.textContent = "Save Changes"; });
+    });
+    // Book a meeting for this lead: opens the same New Appointment drawer
+    // the Appointments tab uses, with this lead already picked.
+    var leadBookBtn = document.getElementById("egLeadBookBtn");
+    if (leadBookBtn) leadBookBtn.addEventListener("click", function(){
+      state.newAppointmentSelectedLeadId = state.leadDrawerId;
+      state.newAppointmentLeadQuery = "";
+      state.newAppointmentDrawerOpen = true;
+      render();
+    });
+    document.querySelectorAll("[data-appt-edit]").forEach(function(btn){
+      btn.addEventListener("click", function(){ state.appointmentDrawerId = btn.getAttribute("data-appt-edit"); render(); });
     });
     document.querySelectorAll("[data-appt-status]").forEach(function(sel){
       sel.addEventListener("change", function(){
@@ -3052,19 +3495,99 @@
   // name customers see in texts and emails and how to reach the business.
   function accountHtml(){
     var t = state.tenantSelf;
-    if (!t) return '<div class="eg-card"><div class="eg-empty">Loading...</div></div>';
-    return '<div class="eg-card" id="egAccountCard">' +
-      '<h3>Business details</h3>' +
-      '<p class="eg-small eg-muted" style="margin-top:-8px">The business name appears in the texts and emails your customers receive.</p>' +
-      '<div class="eg-form-row"><label>Business name</label><input class="eg-input" id="egAcctName" value="' + esc(t.name || "") + '" /></div>' +
-      '<div class="eg-form-row"><label>Contact name</label><input class="eg-input" id="egAcctContactName" value="' + esc(t.contact_name || "") + '" /></div>' +
-      '<div class="eg-form-row"><label>Contact phone</label><input class="eg-input" id="egAcctContactPhone" placeholder="(555) 123-4567" value="' + esc(t.contact_phone || "") + '" /></div>' +
-      '<div class="eg-form-row"><label>Website</label><input class="eg-input" id="egAcctWebsite" placeholder="https://" value="' + esc(t.website || "") + '" /></div>' +
-      '<button class="eg-btn" id="egAcctSave">Save</button>' +
+    var businessCard = !t
+      ? '<div class="eg-card"><div class="eg-empty">Loading...</div></div>'
+      : '<div class="eg-card" id="egAccountCard">' +
+        '<h3>Business details</h3>' +
+        '<p class="eg-small eg-muted" style="margin-top:-8px">The business name appears in the texts and emails your customers receive.</p>' +
+        '<div class="eg-form-row"><label>Business name</label><input class="eg-input" id="egAcctName" value="' + esc(t.name || "") + '" /></div>' +
+        '<div class="eg-form-row"><label>Contact name</label><input class="eg-input" id="egAcctContactName" value="' + esc(t.contact_name || "") + '" /></div>' +
+        '<div class="eg-form-row"><label>Contact phone</label><input class="eg-input" id="egAcctContactPhone" placeholder="(555) 123-4567" value="' + esc(t.contact_phone || "") + '" /></div>' +
+        '<div class="eg-form-row"><label>Website</label><input class="eg-input" id="egAcctWebsite" placeholder="https://" value="' + esc(t.website || "") + '" /></div>' +
+        '<button class="eg-btn" id="egAcctSave">Save</button>' +
+        '</div>';
+    return businessCard + passwordCardHtml();
+  }
+
+  // The admin sets a client's first password when creating them; this is
+  // how the client replaces it with their own. POST /auth/change-password
+  // wants current_password, new_password (12+ characters, enforced by the
+  // backend) and confirm_password, and answers 204 on success. The login
+  // email is shown read-only: it's the username, and having it on the form
+  // also lets a browser's password manager offer to update the right entry.
+  function passwordCardHtml(){
+    var email = (state.user && state.user.email) || "";
+    return '<div class="eg-card" id="egPasswordCard" style="margin-top:16px">' +
+      '<h3>Change password</h3>' +
+      '<p class="eg-small eg-muted" style="margin-top:-8px">Your email is your username. Pick a password of at least 12 characters that you don\'t use anywhere else.</p>' +
+      '<form id="egPwForm" autocomplete="on">' +
+      '<div class="eg-form-row"><label>Login email (username)</label><input class="eg-input" type="email" id="egPwUsername" autocomplete="username" value="' + esc(email) + '" readonly style="background:#f7f9fc" /></div>' +
+      '<div class="eg-form-row"><label>Current password</label><input class="eg-input" type="password" id="egPwCurrent" autocomplete="current-password" /></div>' +
+      '<div class="eg-form-row"><label>New password <span class="eg-small eg-muted">(at least 12 characters)</span></label><input class="eg-input" type="password" id="egPwNew" autocomplete="new-password" /></div>' +
+      '<div class="eg-form-row"><label>Confirm new password</label><input class="eg-input" type="password" id="egPwConfirm" autocomplete="new-password" /></div>' +
+      '<label class="eg-small" style="display:flex;align-items:center;gap:6px;margin-bottom:12px"><input type="checkbox" id="egPwShow" />Show passwords</label>' +
+      '<div class="eg-error" id="egPwError" hidden></div>' +
+      '<button type="submit" class="eg-btn" id="egPwSave">Change Password</button>' +
+      '</form>' +
       '</div>';
   }
 
+  function bindPasswordCard(){
+    var form = document.getElementById("egPwForm");
+    if (!form) return;
+    var errEl = document.getElementById("egPwError");
+    // Errors go in an inline element instead of a toast: showToast()
+    // re-renders the whole page, which would wipe the three password
+    // fields the owner just typed and make them start over after a typo.
+    function showErr(msg){ errEl.textContent = msg; errEl.hidden = false; }
+
+    var showBox = document.getElementById("egPwShow");
+    if (showBox) showBox.addEventListener("change", function(){
+      ["egPwCurrent", "egPwNew", "egPwConfirm"].forEach(function(id){
+        document.getElementById(id).type = showBox.checked ? "text" : "password";
+      });
+    });
+
+    form.addEventListener("submit", function(e){
+      e.preventDefault();
+      errEl.hidden = true;
+      var current = document.getElementById("egPwCurrent").value;
+      var next = document.getElementById("egPwNew").value;
+      var confirm = document.getElementById("egPwConfirm").value;
+      if (!current) { showErr("Enter your current password."); return; }
+      if (next.length < 12) { showErr("The new password must be at least 12 characters."); return; }
+      if (next !== confirm) { showErr("The new password and its confirmation don't match."); return; }
+      if (next === current) { showErr("The new password must be different from the current one."); return; }
+
+      var btn = document.getElementById("egPwSave");
+      btn.disabled = true; btn.textContent = "Changing...";
+      api("/api/v1/auth/change-password", {
+        method: "POST",
+        keepSessionOn401: true,
+        body: { current_password: current, new_password: next, confirm_password: confirm }
+      })
+        .then(function(){
+          // showToast re-renders, which also clears the three fields.
+          showToast("Password changed");
+        })
+        .catch(function(err){
+          btn.disabled = false; btn.textContent = "Change Password";
+          if (err.status === 401) {
+            // Either a wrong current password or a genuinely expired login -
+            // /auth/me tells them apart (a dead token logs out there, as it
+            // should; a live one means it was the password).
+            api("/api/v1/auth/me")
+              .then(function(){ showErr("Your current password is incorrect."); })
+              .catch(function(){ /* api() already logged them out */ });
+            return;
+          }
+          showErr(err.message);
+        });
+    });
+  }
+
   function bindAccount(){
+    bindPasswordCard();
     var save = document.getElementById("egAcctSave");
     if (!save) return;
     save.addEventListener("click", function(){
@@ -3209,6 +3732,35 @@
   window.addEventListener("focus", function(){
     if (state.view === "integrations" && state.token) ensureGoogleCalendarStatus();
   });
+
+  // Test-only hook: exposes real internal functions/state for Node-based
+  // tests to call directly, instead of a separately maintained copy of
+  // their logic. Inert everywhere else - it only runs when a test harness
+  // sets window.__EXPOSE_PORTAL_TEST_HOOKS__ = true BEFORE this script
+  // loads, which production and normal browser use never do.
+  if (typeof window !== "undefined" && window.__EXPOSE_PORTAL_TEST_HOOKS__) {
+    window.__portalTestHooks = {
+      launchWhatsappEmbeddedSignup: launchWhatsappEmbeddedSignup,
+      completeWhatsappEmbeddedSignup: completeWhatsappEmbeddedSignup,
+      loadWhatsappConnection: loadWhatsappConnection,
+      hasActiveIdleTimer: function(){ return idleTimer !== null; },
+      resetIdleTimer: resetIdleTimer,
+      doLogout: doLogout,
+      fmtApptDateTime: fmtApptDateTime,
+      fmtApptTime: fmtApptTime,
+      render: render,
+      loadVoiceSettings: loadVoiceSettings,
+      startChannelAutoRefresh: startChannelAutoRefresh,
+      hasActiveChannelAutoRefresh: function(){ return !!state._channelRefreshTimer; },
+      CHANNEL_ACTIVITY: CHANNEL_ACTIVITY
+    };
+    // A plain "state: state" property would snapshot the object that
+    // existed at load time - doLogout() now reassigns the state variable
+    // itself (see initialState() above) rather than mutating it in place,
+    // so a snapshot would silently go stale after the first logout. This
+    // getter always reads the current binding instead.
+    Object.defineProperty(window.__portalTestHooks, "state", { get: function(){ return state; } });
+  }
 
   init();
 })();
