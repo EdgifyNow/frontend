@@ -344,7 +344,12 @@
           // settles means that callback simply never runs.
           return new Promise(function(){});
         }
-        if (res.status === 401) {
+        // keepSessionOn401: a 401 normally means the login token expired,
+        // so everything else logs out. change-password is the exception -
+        // a wrong *current password* can also come back as a 401, and
+        // logging the owner out for a typo would be wrong. That caller
+        // checks /auth/me itself to tell the two apart.
+        if (res.status === 401 && !opts.keepSessionOn401) {
           doLogout();
           var e = new Error("Session expired. Please log in again.");
           throw e;
@@ -355,9 +360,22 @@
           if (!res.ok) {
             var msg = "Request failed (" + res.status + ")";
             if (data ? data.detail : false) {
-              msg = typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail);
+              if (typeof data.detail === "string") {
+                msg = data.detail;
+              } else if (Array.isArray(data.detail)) {
+                // FastAPI validation errors: [{loc:["body","new_password"], msg:"..."}]
+                // - show the human sentence, not the raw JSON.
+                msg = data.detail.map(function(d){
+                  var field = d && d.loc && d.loc.length ? String(d.loc[d.loc.length - 1]).replace(/_/g, " ") : "";
+                  return (field ? field + ": " : "") + ((d && d.msg) || JSON.stringify(d));
+                }).join("; ");
+              } else {
+                msg = JSON.stringify(data.detail);
+              }
             }
-            throw new Error(msg);
+            var err = new Error(msg);
+            err.status = res.status;
+            throw err;
           }
           return data;
         });
@@ -1284,9 +1302,24 @@
       pagerHtml("egAppointment", page, "appointments") +
       '</div>';
   }
+  // The edit drawer can be opened from the Appointments tab (every
+  // appointment, in state.allAppointments) or from inside a lead's own
+  // drawer (just that lead's, in state.leadAppointments) - look in both.
+  // Appointments from the lead drawer don't carry the contact the way the
+  // merged list does, so attach it from the lead.
+  function findAppointment(id){
+    var a = (state.allAppointments || []).filter(function(x){ return x.id === id; })[0]
+      || (state.leadAppointments || []).filter(function(x){ return x.id === id; })[0];
+    if (!a) return null;
+    if (a.contact) return a;
+    var copy = {}; for (var k in a) copy[k] = a[k];
+    var lead = joinedLeads().filter(function(l){ return l.id === a.lead_id; })[0];
+    copy.contact = lead ? lead.contact : null;
+    return copy;
+  }
   function appointmentDrawerHtml(){
     if (!state.appointmentDrawerId) return "";
-    var a = (state.allAppointments || []).filter(function(x){ return x.id === state.appointmentDrawerId; })[0];
+    var a = findAppointment(state.appointmentDrawerId);
     if (!a) return "";
     var statusSelect = '<select class="eg-select" id="egApptDrawerStatus">' + APPT_STATUS_OPTIONS.map(function(s){
       return '<option value="' + s + '"' + (s === a.status ? " selected" : "") + '>' + appointmentStatusLabel(s) + '</option>';
@@ -1316,7 +1349,7 @@
     var saveBtn = document.getElementById("egApptDrawerSave");
     if (saveBtn) saveBtn.addEventListener("click", function(){
       var id = state.appointmentDrawerId;
-      var original = (state.allAppointments || []).filter(function(a){ return a.id === id; })[0] || {};
+      var original = findAppointment(id) || {};
       var startVal = document.getElementById("egApptDrawerStart").value;
       var endVal = document.getElementById("egApptDrawerEnd").value;
       // datetime-local gives "YYYY-MM-DDTHH:MM" with no timezone of its
@@ -1351,12 +1384,19 @@
       saveBtn.disabled = true; saveBtn.textContent = "Saving...";
       api("/api/v1/crm/appointments/" + id, { method: "PATCH", body: body })
         .then(function(updated){
-          state.allAppointments = (state.allAppointments || []).map(function(a){
-            if (a.id !== updated.id) return a;
-            var copy = {}; for (var k in a) copy[k] = a[k];
-            for (var k2 in updated) copy[k2] = updated[k2];
-            return copy;
-          });
+          // Patch the saved copy into whichever lists are loaded - but
+          // leave a list that was never fetched as null, not [], or the
+          // Appointments tab would claim "No appointments yet".
+          var mergeInto = function(list){
+            return list.map(function(a){
+              if (a.id !== updated.id) return a;
+              var copy = {}; for (var k in a) copy[k] = a[k];
+              for (var k2 in updated) copy[k2] = updated[k2];
+              return copy;
+            });
+          };
+          if (state.allAppointments) state.allAppointments = mergeInto(state.allAppointments);
+          if (state.leadAppointments) state.leadAppointments = mergeInto(state.leadAppointments);
           showToast("Appointment updated");
           state.appointmentDrawerId = null;
           render();
@@ -1479,9 +1519,22 @@
           for (var k in created) copy[k] = created[k];
           copy.lead = lead;
           copy.contact = lead ? (contactMapFromState()[lead.contact_id] || null) : null;
-          state.allAppointments = (state.allAppointments || []).concat([copy]).sort(function(x, y){
-            return new Date(x.start_at) - new Date(y.start_at);
-          });
+          // This drawer is also opened from inside a lead's own drawer, in
+          // which case the Appointments tab was never loaded - leave it
+          // null (it fetches everything itself when opened) rather than
+          // turning it into a one-item list.
+          if (state.allAppointments) {
+            state.allAppointments = state.allAppointments.concat([copy]).sort(function(x, y){
+              return new Date(x.start_at) - new Date(y.start_at);
+            });
+          }
+          // If that lead's drawer is open underneath, show the new
+          // appointment there, and refresh leads (a booking can clear a
+          // lead's "needs manual scheduling" flag).
+          if (state.leadDrawerId === leadId) {
+            api("/api/v1/crm/leads/" + leadId + "/appointments").then(function(d){ state.leadAppointments = d; render(); }).catch(function(){});
+          }
+          ensureLeads();
           showToast("Appointment created");
           closeNewApptDrawer();
         })
@@ -2606,6 +2659,7 @@
       '<div class="eg-form-row"><label>Notes</label><textarea class="eg-textarea" id="egDrawerNotes" style="min-height:80px">' + esc(r.notes || "") + '</textarea></div>' +
       '<button class="eg-btn" id="egDrawerSaveStatus">Save Changes</button>' +
       '<h4>Appointments</h4>' +
+      '<button class="eg-btn ghost" id="egLeadBookBtn" style="margin-bottom:10px">+ Book a Meeting</button>' +
       appointmentsHtml() +
       '</aside>';
   }
@@ -2661,7 +2715,8 @@
         '<b>' + when + '</b>' +
         (where ? '<div class="eg-small eg-muted" style="margin-top:2px">' + where + '</div>' : "") +
         (a.notes ? '<div class="eg-small" style="margin-top:6px">' + esc(a.notes) + '</div>' : "") +
-        '<div style="margin-top:8px"><select class="eg-select" style="padding:6px 8px;font-size:12px;width:auto" data-appt-status="' + esc(a.id) + '">' + opts + '</select></div>' +
+        '<div style="margin-top:8px;display:flex;gap:8px;align-items:center"><select class="eg-select" style="padding:6px 8px;font-size:12px;width:auto" data-appt-status="' + esc(a.id) + '">' + opts + '</select>' +
+        '<button class="eg-btn ghost" style="padding:5px 10px;font-size:12px" data-appt-edit="' + esc(a.id) + '">Edit / Reschedule</button></div>' +
         '</div>';
     }).join("");
   }
@@ -2698,6 +2753,18 @@
           render();
         })
         .catch(function(err){ showToast(err.message, true); saveBtn.disabled = false; saveBtn.textContent = "Save Changes"; });
+    });
+    // Book a meeting for this lead: opens the same New Appointment drawer
+    // the Appointments tab uses, with this lead already picked.
+    var leadBookBtn = document.getElementById("egLeadBookBtn");
+    if (leadBookBtn) leadBookBtn.addEventListener("click", function(){
+      state.newAppointmentSelectedLeadId = state.leadDrawerId;
+      state.newAppointmentLeadQuery = "";
+      state.newAppointmentDrawerOpen = true;
+      render();
+    });
+    document.querySelectorAll("[data-appt-edit]").forEach(function(btn){
+      btn.addEventListener("click", function(){ state.appointmentDrawerId = btn.getAttribute("data-appt-edit"); render(); });
     });
     document.querySelectorAll("[data-appt-status]").forEach(function(sel){
       sel.addEventListener("change", function(){
@@ -3428,19 +3495,99 @@
   // name customers see in texts and emails and how to reach the business.
   function accountHtml(){
     var t = state.tenantSelf;
-    if (!t) return '<div class="eg-card"><div class="eg-empty">Loading...</div></div>';
-    return '<div class="eg-card" id="egAccountCard">' +
-      '<h3>Business details</h3>' +
-      '<p class="eg-small eg-muted" style="margin-top:-8px">The business name appears in the texts and emails your customers receive.</p>' +
-      '<div class="eg-form-row"><label>Business name</label><input class="eg-input" id="egAcctName" value="' + esc(t.name || "") + '" /></div>' +
-      '<div class="eg-form-row"><label>Contact name</label><input class="eg-input" id="egAcctContactName" value="' + esc(t.contact_name || "") + '" /></div>' +
-      '<div class="eg-form-row"><label>Contact phone</label><input class="eg-input" id="egAcctContactPhone" placeholder="(555) 123-4567" value="' + esc(t.contact_phone || "") + '" /></div>' +
-      '<div class="eg-form-row"><label>Website</label><input class="eg-input" id="egAcctWebsite" placeholder="https://" value="' + esc(t.website || "") + '" /></div>' +
-      '<button class="eg-btn" id="egAcctSave">Save</button>' +
+    var businessCard = !t
+      ? '<div class="eg-card"><div class="eg-empty">Loading...</div></div>'
+      : '<div class="eg-card" id="egAccountCard">' +
+        '<h3>Business details</h3>' +
+        '<p class="eg-small eg-muted" style="margin-top:-8px">The business name appears in the texts and emails your customers receive.</p>' +
+        '<div class="eg-form-row"><label>Business name</label><input class="eg-input" id="egAcctName" value="' + esc(t.name || "") + '" /></div>' +
+        '<div class="eg-form-row"><label>Contact name</label><input class="eg-input" id="egAcctContactName" value="' + esc(t.contact_name || "") + '" /></div>' +
+        '<div class="eg-form-row"><label>Contact phone</label><input class="eg-input" id="egAcctContactPhone" placeholder="(555) 123-4567" value="' + esc(t.contact_phone || "") + '" /></div>' +
+        '<div class="eg-form-row"><label>Website</label><input class="eg-input" id="egAcctWebsite" placeholder="https://" value="' + esc(t.website || "") + '" /></div>' +
+        '<button class="eg-btn" id="egAcctSave">Save</button>' +
+        '</div>';
+    return businessCard + passwordCardHtml();
+  }
+
+  // The admin sets a client's first password when creating them; this is
+  // how the client replaces it with their own. POST /auth/change-password
+  // wants current_password, new_password (12+ characters, enforced by the
+  // backend) and confirm_password, and answers 204 on success. The login
+  // email is shown read-only: it's the username, and having it on the form
+  // also lets a browser's password manager offer to update the right entry.
+  function passwordCardHtml(){
+    var email = (state.user && state.user.email) || "";
+    return '<div class="eg-card" id="egPasswordCard" style="margin-top:16px">' +
+      '<h3>Change password</h3>' +
+      '<p class="eg-small eg-muted" style="margin-top:-8px">Your email is your username. Pick a password of at least 12 characters that you don\'t use anywhere else.</p>' +
+      '<form id="egPwForm" autocomplete="on">' +
+      '<div class="eg-form-row"><label>Login email (username)</label><input class="eg-input" type="email" id="egPwUsername" autocomplete="username" value="' + esc(email) + '" readonly style="background:#f7f9fc" /></div>' +
+      '<div class="eg-form-row"><label>Current password</label><input class="eg-input" type="password" id="egPwCurrent" autocomplete="current-password" /></div>' +
+      '<div class="eg-form-row"><label>New password <span class="eg-small eg-muted">(at least 12 characters)</span></label><input class="eg-input" type="password" id="egPwNew" autocomplete="new-password" /></div>' +
+      '<div class="eg-form-row"><label>Confirm new password</label><input class="eg-input" type="password" id="egPwConfirm" autocomplete="new-password" /></div>' +
+      '<label class="eg-small" style="display:flex;align-items:center;gap:6px;margin-bottom:12px"><input type="checkbox" id="egPwShow" />Show passwords</label>' +
+      '<div class="eg-error" id="egPwError" hidden></div>' +
+      '<button type="submit" class="eg-btn" id="egPwSave">Change Password</button>' +
+      '</form>' +
       '</div>';
   }
 
+  function bindPasswordCard(){
+    var form = document.getElementById("egPwForm");
+    if (!form) return;
+    var errEl = document.getElementById("egPwError");
+    // Errors go in an inline element instead of a toast: showToast()
+    // re-renders the whole page, which would wipe the three password
+    // fields the owner just typed and make them start over after a typo.
+    function showErr(msg){ errEl.textContent = msg; errEl.hidden = false; }
+
+    var showBox = document.getElementById("egPwShow");
+    if (showBox) showBox.addEventListener("change", function(){
+      ["egPwCurrent", "egPwNew", "egPwConfirm"].forEach(function(id){
+        document.getElementById(id).type = showBox.checked ? "text" : "password";
+      });
+    });
+
+    form.addEventListener("submit", function(e){
+      e.preventDefault();
+      errEl.hidden = true;
+      var current = document.getElementById("egPwCurrent").value;
+      var next = document.getElementById("egPwNew").value;
+      var confirm = document.getElementById("egPwConfirm").value;
+      if (!current) { showErr("Enter your current password."); return; }
+      if (next.length < 12) { showErr("The new password must be at least 12 characters."); return; }
+      if (next !== confirm) { showErr("The new password and its confirmation don't match."); return; }
+      if (next === current) { showErr("The new password must be different from the current one."); return; }
+
+      var btn = document.getElementById("egPwSave");
+      btn.disabled = true; btn.textContent = "Changing...";
+      api("/api/v1/auth/change-password", {
+        method: "POST",
+        keepSessionOn401: true,
+        body: { current_password: current, new_password: next, confirm_password: confirm }
+      })
+        .then(function(){
+          // showToast re-renders, which also clears the three fields.
+          showToast("Password changed");
+        })
+        .catch(function(err){
+          btn.disabled = false; btn.textContent = "Change Password";
+          if (err.status === 401) {
+            // Either a wrong current password or a genuinely expired login -
+            // /auth/me tells them apart (a dead token logs out there, as it
+            // should; a live one means it was the password).
+            api("/api/v1/auth/me")
+              .then(function(){ showErr("Your current password is incorrect."); })
+              .catch(function(){ /* api() already logged them out */ });
+            return;
+          }
+          showErr(err.message);
+        });
+    });
+  }
+
   function bindAccount(){
+    bindPasswordCard();
     var save = document.getElementById("egAcctSave");
     if (!save) return;
     save.addEventListener("click", function(){

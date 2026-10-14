@@ -399,6 +399,182 @@ test("a booking conflict (409) from the server is shown as an error and keeps th
   });
 });
 
+// ---- Client self-service: change password, and booking/rescheduling from a lead ----
+
+function openAccountPage(hooks) {
+  hooks.state.token = "fake-token";
+  hooks.state.user = { id: "u1", role: "client", email: "owner@example.com" };
+  hooks.state.booting = false;
+  hooks.state.view = "account";
+  hooks.state.tenantSelf = { id: "t1", name: "Acme Salon" };
+  hooks.render();
+}
+function fillPassword(win, current, next, confirm) {
+  win.document.getElementById("egPwCurrent").value = current;
+  win.document.getElementById("egPwNew").value = next;
+  win.document.getElementById("egPwConfirm").value = confirm;
+}
+function submitPasswordForm(win) {
+  win.document.getElementById("egPwForm").dispatchEvent(new win.Event("submit", { cancelable: true, bubbles: true }));
+}
+function pwError(win) {
+  const el = win.document.getElementById("egPwError");
+  return el.hidden ? null : el.textContent;
+}
+function settle() { return new Promise((r) => setTimeout(r, 0)).then(() => new Promise((r) => setTimeout(r, 0))); }
+
+test("the Account page has a Change Password card showing the login email as the read-only username", () => {
+  const { win, hooks } = buildPage();
+  openAccountPage(hooks);
+  assert(!!win.document.getElementById("egPwForm"), "the change-password form is rendered");
+  const username = win.document.getElementById("egPwUsername");
+  assert(username.value === "owner@example.com" && username.readOnly, "the login email is shown, read-only, as the username");
+});
+
+test("change-password validates client-side and sends nothing for an empty, too-short, mismatched, or unchanged password", () => {
+  const { win, hooks, fetchCalls } = buildPage();
+  openAccountPage(hooks);
+
+  fillPassword(win, "", "", ""); submitPasswordForm(win);
+  assert(/current password/i.test(pwError(win)), "an empty form asks for the current password - got: " + pwError(win));
+  fillPassword(win, "oldpassword-1", "short", "short"); submitPasswordForm(win);
+  assert(/at least 12/.test(pwError(win)), "a new password under 12 characters is rejected - got: " + pwError(win));
+  fillPassword(win, "oldpassword-1", "brand-new-password", "brand-new-passwordX"); submitPasswordForm(win);
+  assert(/don't match/.test(pwError(win)), "a mismatched confirmation is rejected - got: " + pwError(win));
+  fillPassword(win, "same-password-123", "same-password-123", "same-password-123"); submitPasswordForm(win);
+  assert(/different/.test(pwError(win)), "reusing the current password is rejected - got: " + pwError(win));
+  assert(fetchCalls.filter((c) => String(c.url).indexOf("change-password") !== -1).length === 0, "none of those reached the API");
+});
+
+test("a valid change-password POSTs current/new/confirm to the real endpoint and reports success", () => {
+  const { win, hooks, fetchCalls, setFetchHandler } = buildPage();
+  openAccountPage(hooks);
+  setFetchHandler(() => Promise.resolve({ status: 204, ok: true, text: () => Promise.resolve("") }));
+
+  fillPassword(win, "oldpassword-1", "brand-new-password", "brand-new-password");
+  submitPasswordForm(win);
+  return settle().then(() => {
+    const call = fetchCalls.filter((c) => String(c.url).indexOf("/api/v1/auth/change-password") !== -1)[0];
+    assert(!!call && call.opts.method === "POST", "POST /auth/change-password was made");
+    const body = JSON.parse(call.opts.body);
+    assert(body.current_password === "oldpassword-1" && body.new_password === "brand-new-password" && body.confirm_password === "brand-new-password",
+      "body carries current_password, new_password and confirm_password");
+    assert(hooks.state.toast && !hooks.state.toast.isError && /changed/i.test(hooks.state.toast.msg), "success is reported - got: " + JSON.stringify(hooks.state.toast));
+    assert(hooks.state.token === "fake-token", "the owner stays signed in after changing it");
+  });
+});
+
+test("a 401 for a wrong current password shows an inline error and does NOT log the owner out", () => {
+  const { win, hooks, fetchCalls, setFetchHandler } = buildPage();
+  openAccountPage(hooks);
+  setFetchHandler((url) => {
+    if (String(url).indexOf("change-password") !== -1) {
+      return Promise.resolve({ status: 401, ok: false, text: () => Promise.resolve(JSON.stringify({ detail: "Invalid credentials" })) });
+    }
+    // /auth/me - the owner's token is still good.
+    return Promise.resolve({ status: 200, ok: true, text: () => Promise.resolve(JSON.stringify({ id: "u1", email: "owner@example.com" })) });
+  });
+
+  fillPassword(win, "wrong-current-1", "brand-new-password", "brand-new-password");
+  submitPasswordForm(win);
+  return settle().then(settle).then(() => {
+    assert(hooks.state.token === "fake-token" && !!hooks.state.user, "still signed in - a typo'd current password is not an expired session");
+    assert(/current password is incorrect/i.test(pwError(win) || ""), "the owner is told the current password is wrong - got: " + pwError(win));
+    assert(fetchCalls.some((c) => String(c.url).indexOf("/api/v1/auth/me") !== -1), "/auth/me was used to tell a wrong password apart from an expired login");
+  });
+});
+
+test("a genuinely expired session during change-password still logs out, rather than being mistaken for a wrong password", () => {
+  const { win, hooks, setFetchHandler } = buildPage();
+  openAccountPage(hooks);
+  setFetchHandler(() => Promise.resolve({ status: 401, ok: false, text: () => Promise.resolve(JSON.stringify({ detail: "Not authenticated" })) }));
+
+  fillPassword(win, "oldpassword-1", "brand-new-password", "brand-new-password");
+  submitPasswordForm(win);
+  return settle().then(settle).then(() => {
+    assert(hooks.state.token === null, "the dead session is logged out (the /auth/me follow-up 401s too)");
+  });
+});
+
+test("FastAPI validation arrays are shown as readable sentences, not raw JSON", () => {
+  const { win, hooks, setFetchHandler } = buildPage();
+  openAccountPage(hooks);
+  setFetchHandler(() => Promise.resolve({
+    status: 422, ok: false,
+    text: () => Promise.resolve(JSON.stringify({ detail: [{ loc: ["body", "new_password"], msg: "String should have at least 12 characters" }] })),
+  }));
+  fillPassword(win, "oldpassword-1", "brand-new-password", "brand-new-password");
+  submitPasswordForm(win);
+  return settle().then(() => {
+    const msg = pwError(win) || "";
+    assert(msg === "new password: String should have at least 12 characters", "readable message - got: " + msg);
+  });
+});
+
+const BOOK_CONTACT = { id: "c1", first_name: "Priya", last_name: "Shah", phone: "+15551234567", email: "priya@example.com" };
+const BOOK_LEAD = { id: "lead1", contact_id: "c1", service_interest: "Catering", status: "new" };
+function openLeadDrawerWith(hooks, appointments) {
+  hooks.state.token = "fake-token";
+  hooks.state.user = { id: "u1", role: "client", email: "owner@example.com" };
+  hooks.state.booting = false;
+  hooks.state.view = "leads";
+  hooks.state.tab = "leads";
+  hooks.state.leads = [BOOK_LEAD];
+  hooks.state.contacts = [BOOK_CONTACT];
+  hooks.state.leadDrawerId = "lead1";
+  hooks.state.leadAppointments = appointments;
+  hooks.render();
+}
+
+test("a lead's drawer has a Book a Meeting button that opens the New Appointment drawer with that lead already picked", () => {
+  const { win, hooks } = buildPage();
+  openLeadDrawerWith(hooks, []);
+  assert(!!win.document.getElementById("egLeadBookBtn"), "the Book a Meeting button is in the lead drawer");
+  win.document.getElementById("egLeadBookBtn").dispatchEvent(new win.Event("click"));
+  assert(!!win.document.getElementById("egNewApptDrawerBackdrop"), "the New Appointment drawer opens");
+  assert(hooks.state.newAppointmentSelectedLeadId === "lead1", "this lead is already selected");
+  assert(!win.document.getElementById("egNewApptLeadSearch"), "no lead search is shown - the lead is fixed");
+  assert(!win.document.getElementById("egNewApptCreate").disabled, "Create is enabled straight away");
+});
+
+test("booking from a lead's drawer sends wall-clock digits + the tenant zone, refreshes that lead's list, and leaves the never-loaded Appointments tab list null", () => {
+  const { win, hooks, fetchCalls, setFetchHandler } = buildPage();
+  openLeadDrawerWith(hooks, []);
+  hooks.state.tenantSelf = { voice_timezone: "America/New_York" };
+  hooks.state.allAppointments = null;
+
+  const created = { id: "appt-new", lead_id: "lead1", status: "scheduled", start_at: "2026-11-05T16:00:00Z", end_at: null, meeting_url: null, notes: null };
+  setFetchHandler((url, opts) => {
+    const u = String(url);
+    if (opts && opts.method === "POST") return Promise.resolve({ status: 201, ok: true, text: () => Promise.resolve(JSON.stringify(created)) });
+    if (u.indexOf("/crm/leads/lead1/appointments") !== -1) return Promise.resolve({ status: 200, ok: true, text: () => Promise.resolve(JSON.stringify([created])) });
+    return Promise.resolve({ status: 200, ok: true, text: () => Promise.resolve("[]") });
+  });
+
+  win.document.getElementById("egLeadBookBtn").dispatchEvent(new win.Event("click"));
+  win.document.getElementById("egNewApptStart").value = "2026-11-05T16:00";
+  win.document.getElementById("egNewApptCreate").dispatchEvent(new win.Event("click"));
+  return settle().then(settle).then(settle).then(() => {
+    const post = fetchCalls.filter((c) => c.opts && c.opts.method === "POST")[0];
+    const body = JSON.parse(post.opts.body);
+    assert(body.start_at === "2026-11-05T16:00:00Z" && body.timezone === "America/New_York",
+      "wall-clock start and the tenant's own zone are sent, not the browser's - got: " + body.start_at + " / " + body.timezone);
+    assert(hooks.state.allAppointments === null, "the Appointments tab's list stays null (not a one-item list) when it was never loaded");
+    assert(Array.isArray(hooks.state.leadAppointments) && hooks.state.leadAppointments.length === 1, "that lead's own appointment list was refreshed");
+  });
+});
+
+test("each appointment in a lead's drawer has Edit / Reschedule, opening the edit drawer with the contact attached", () => {
+  const { win, hooks } = buildPage();
+  openLeadDrawerWith(hooks, [{ id: "a1", lead_id: "lead1", status: "scheduled", start_at: "2026-11-05T16:00:00Z", end_at: "2026-11-05T16:30:00Z", meeting_url: null, notes: null }]);
+  const btn = win.document.querySelector("[data-appt-edit='a1']");
+  assert(!!btn, "an Edit / Reschedule button is shown on the appointment");
+  btn.dispatchEvent(new win.Event("click"));
+  assert(!!win.document.getElementById("egApptDrawerSave"), "the edit drawer opens even though the Appointments tab was never loaded");
+  assert(win.document.getElementById("egApptDrawerStart").value === "2026-11-05T16:00", "prefilled with the raw wall-clock digits");
+  assert(/Priya Shah/.test(win.document.body.textContent), "the lead's contact is shown in the drawer (attached from the lead)");
+});
+
 let p = Promise.resolve();
 for (const t of pending) {
   p = p.then(() => t.fn()).catch((e) => { console.error("FAIL (threw): " + t.name + " - " + e.stack); failures++; });
