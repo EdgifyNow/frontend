@@ -259,6 +259,47 @@ test("what callers book and whether staff approve first are saved with the voice
   assert(body.bookings_need_approval === true, "approve-first is sent");
 });
 
+test("with texts turned off, a decided request tells staff to call the customer", () => {
+  const { hooks } = buildPage();
+  const cfg = hooks.CHANNEL_ACTIVITY.voice;
+  hooks.state.voiceStatusFilter = "all";
+  hooks.state.voiceCaptures = [
+    order({ id: "o1", status: "in_progress", review_decision: "approved", text_status: "off", text_error: "Texts are turned off" }),
+    order({ id: "r1", capture_type: "reservation", status: "cancelled", review_decision: "rejected", text_status: "off",
+      details: { party_size: 2, requested_date: "2026-10-17", requested_time: "19:00" }, flags: [] })
+  ];
+  const html = hooks.channelActivityHtml(cfg);
+  const calls = html.split("Call the customer: texts are turned off").length - 1;
+  assert(calls === 2, "both the order and the reservation say to call - got " + calls);
+  assert(html.includes("+12015550101"), "with the number to call");
+  assert(!html.includes("Customer texted"), "never claims a text went out");
+});
+
+test("customer texts can be switched off in settings, and a platform-wide off is shown", async () => {
+  const { win, hooks, fetchCalls, setFetchHandler } = buildPage();
+  hooks.state.voiceSettingsOpen = true;
+  hooks.state.voiceSettings = {
+    welcome_message: "Hi", is_welcome_message_default: true, human_handoff_number_masked: null,
+    transfer_message: "Hold", is_transfer_message_default: true, ring_timeout_seconds: 20,
+    no_answer_message: "Sorry", is_no_answer_message_default: true, timezone: "America/New_York",
+    business_hours: null, after_hours_message: "Closed", is_after_hours_message_default: true,
+    emergency_message: "", is_emergency_message_default: true, voice_audience: null, voice_speech_hints: "",
+    booking_kind: "appointment", bookings_need_approval: false, customer_texts_enabled: true, texts_available: false
+  };
+  const panel = hooks.voiceSettingsPanelHtml();
+  assert(panel.includes("turned off for the whole platform"), "the owner is told texts are off platform-wide");
+  win.document.getElementById("egTest").innerHTML = panel;
+  hooks.bindVoiceSettingsPanel();
+  setFetchHandler(() => jsonResponse(hooks.state.voiceSettings));
+
+  win.document.getElementById("egCustomerTextsEnabled").checked = false;
+  win.document.getElementById("egVoiceSettingsSave").click();
+  await new Promise((r) => setTimeout(r, 0));
+
+  const body = JSON.parse(fetchCalls.find((c) => c.opts && c.opts.method === "PUT").opts.body);
+  assert(body.customer_texts_enabled === false, "turning customer texts off is sent");
+});
+
 (async () => {
   for (const t of pending) {
     console.log("\n# " + t.name);

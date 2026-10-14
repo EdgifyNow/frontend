@@ -2057,7 +2057,7 @@
     var what = REQUEST_WORD[v.capture_type] || "request";
     if (v.needs_review) {
       return '<div class="eg-vtile-actions">' + act("in_progress", "Approve", "approve") +
-        act("cancelled", "Reject", "reject", "Reject this " + what + "? If the customer agreed to texts, they'll be texted that it couldn't be confirmed. Otherwise please call " + phone + " to let them know.") +
+        act("cancelled", "Reject", "reject", "Reject this " + what + "? Unless the card then shows 'Customer texted', please call " + phone + " to let them know.") +
         view + '</div>';
     }
     if (v.status === "completed" || v.status === "cancelled") return "";
@@ -2071,6 +2071,9 @@
   // call instead.
   function textStatusHtml(v){
     if (v.text_status === "sent") return '<div class="eg-text-status ok">&#10003; Customer texted</div>';
+    if (v.text_status === "off") {
+      return '<div class="eg-text-status bad">&#9742; Call the customer: texts are turned off &mdash; ' + esc(v.contact.phone || "no number on file") + '</div>';
+    }
     if (v.text_status === "failed") {
       return '<div class="eg-text-status bad">Text not sent' + (v.text_error ? ': ' + esc(v.text_error) : '') +
         ' &mdash; call ' + esc(v.contact.phone || "the customer") + '</div>';
@@ -2388,6 +2391,12 @@
       '</select></div>' +
       '<div class="eg-form-row"><label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="egBookingsNeedApproval"' + (s.bookings_need_approval ? " checked" : "") + ' />Staff approve bookings before they\'re confirmed</label>' +
       '<div class="eg-small eg-muted" style="margin-top:4px">On: a booking made by phone or WhatsApp waits on this page for Approve or Reject, and only then goes on the calendar. Off: it\'s booked straight away. Orders and table reservations always wait for approval. Customers who agree to texts are texted the decision.</div></div>' +
+      '<div class="eg-form-row"><label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="egCustomerTextsEnabled"' + (s.customer_texts_enabled !== false ? " checked" : "") + ' />Text customers when their request is approved or rejected</label>' +
+      '<div class="eg-small eg-muted" style="margin-top:4px">Off: callers are never asked about or promised a text, and each approved or rejected request tells you to call the customer instead.</div>' +
+      (s.customer_texts_enabled !== false && s.texts_available === false
+        ? '<div class="eg-small" style="margin-top:4px;color:var(--red)">Texts are currently turned off for the whole platform, so none will be sent.</div>'
+        : '') +
+      '</div>' +
       '<div class="eg-form-row"><label>Welcome Message' + (s.is_welcome_message_default ? defaultTag : "") + '</label><textarea class="eg-textarea" id="egVoiceWelcomeMsg">' + esc(s.welcome_message) + '</textarea></div>' +
       '<div class="eg-form-row"><label>Human Handoff Number' + (s.human_handoff_number_masked ? ' <span class="eg-small eg-muted">(currently ' + esc(s.human_handoff_number_masked) + ')</span>' : "") + '</label>' +
       '<input class="eg-input" id="egVoiceHandoffNumber" placeholder="+12015550172, leave blank to keep unchanged" /></div>' +
@@ -2439,7 +2448,8 @@
         voice_audience: document.getElementById("egVoiceAudience").value,
         voice_speech_hints: document.getElementById("egVoiceSpeechHints").value,
         booking_kind: document.getElementById("egBookingKind").value,
-        bookings_need_approval: document.getElementById("egBookingsNeedApproval").checked
+        bookings_need_approval: document.getElementById("egBookingsNeedApproval").checked,
+        customer_texts_enabled: document.getElementById("egCustomerTextsEnabled").checked
       };
       // Blank means "leave it as it is" here, not "clear it" - unlike the
       // message fields, an empty Human Handoff Number field is far more
