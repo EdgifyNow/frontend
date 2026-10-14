@@ -115,6 +115,14 @@
     voiceDrawerId: null,
     voiceDrawerDetail: null,
     voiceLastUpdated: null,
+    // Ids of the orders/catering requests already seen on each board, so a
+    // refresh can tell which ones just arrived (null until the first load,
+    // which alerts for nothing), and when each new arrival was first seen
+    // (its tile stays highlighted for a minute).
+    voiceKnownArrivalIds: null,
+    whatsappKnownArrivalIds: null,
+    newArrivals: {},
+    unseenArrivals: 0,
     whatsappConnection: null,
     whatsappConnecting: false,
     whatsappCaptures: null,
@@ -405,6 +413,7 @@
     // this tenant can leak into whichever tenant logs in next in this tab.
     state = initialState();
     state.booting = false;
+    updateArrivalTitle();
     // Invalidates any request still in flight from the session that just
     // ended - see api()'s requestGeneration check and sessionGeneration's
     // own comment above.
@@ -1652,9 +1661,22 @@
   // a page reload.
   var CHANNEL_ACTIVE_STATUSES = ["new", "in_progress", "ready"];
   var CHANNEL_REFRESH_MS = 7000;
-  var CHANNEL_TYPE_COLOR = { order: "red", appointment: "purple", lead: "green", general_inquiry: "blue" };
-  var CHANNEL_TYPE_ICON = { order: "&#128722;", appointment: "&#128197;", lead: "&#128100;", general_inquiry: "&#128172;" };
-  var CHANNEL_TYPE_OPTIONS = ["order", "appointment", "lead", "general_inquiry"];
+  var CHANNEL_TYPE_COLOR = { order: "red", catering: "amber", appointment: "purple", lead: "green", general_inquiry: "blue" };
+  var CHANNEL_TYPE_ICON = { order: "&#128722;", catering: "&#127869;", appointment: "&#128197;", lead: "&#128100;", general_inquiry: "&#128172;" };
+  var CHANNEL_TYPE_OPTIONS = ["order", "catering", "appointment", "lead", "general_inquiry"];
+  // A new order is waiting on staff: the caller was told it was "sent to
+  // our team to confirm", so it's approved (-> In Progress) or rejected
+  // (-> Cancelled) before anything else - the backend refuses any other
+  // move from New.
+  var ORDER_STATUS_LABEL = { "new": "Awaiting approval" };
+  var ORDER_FLAG_LABEL = {
+    hidden_number: { text: "Hidden number", red: true },
+    callback_number_differs: { text: "Callback number differs", red: true },
+    large_order: { text: "Large order", red: false },
+    first_time_caller: { text: "First-time caller", red: false }
+  };
+  // How long a new order can wait before its age turns red.
+  var ORDER_LATE_MINUTES = 5;
   // One-touch tile actions: the single most likely next step for each
   // status, so staff never has to open the drawer just to advance an
   // order/appointment/lead through its workflow. "Done" maps to the same
@@ -1758,8 +1780,83 @@
     api("/api/v1/crm/voice-captures?" + params.toString()).then(function(d){
       state[cfg.captures] = d;
       state[cfg.key + "LastUpdated"] = new Date();
+      noteNewArrivals(cfg, d);
       if (silent) { preserveFocus(render); } else { render(); }
     }).catch(function(err){ if (!silent) showToast(err.message, true); });
+  }
+
+  // ---- New order alert: a chime, the tile highlighted for a minute, and a
+  // count in the browser tab's title, so a new order (or catering request)
+  // doesn't sit unseen when nobody is looking at the board. Only for ones
+  // created in the last few minutes, so changing a filter that reveals
+  // older ones never sets it off.
+  var ARRIVAL_ALERT_TYPES = ["order", "catering"];
+  var ARRIVAL_RECENT_MS = 10 * 60 * 1000;
+  var ARRIVAL_HIGHLIGHT_MS = 60 * 1000;
+  var BASE_TITLE = document.title;
+
+  function noteNewArrivals(cfg, captures){
+    var knownKey = cfg.key + "KnownArrivalIds";
+    var waiting = (captures || []).filter(function(v){
+      return ARRIVAL_ALERT_TYPES.indexOf(v.capture_type) !== -1 && v.status === "new";
+    });
+    var known = state[knownKey];
+    var now = Date.now();
+    var fresh = known === null ? [] : waiting.filter(function(v){
+      return !known[v.id] && now - new Date(v.created_at).getTime() < ARRIVAL_RECENT_MS;
+    });
+    var next = known || {};
+    waiting.forEach(function(v){ next[v.id] = true; });
+    state[knownKey] = next;
+    if (!fresh.length) return;
+    fresh.forEach(function(v){ state.newArrivals[v.id] = now; });
+    state.unseenArrivals += fresh.length;
+    updateArrivalTitle();
+    playArrivalChime();
+  }
+
+  function isNewArrival(id){
+    var seenAt = state.newArrivals[id];
+    return !!seenAt && Date.now() - seenAt < ARRIVAL_HIGHLIGHT_MS;
+  }
+
+  function updateArrivalTitle(){
+    document.title = state.unseenArrivals ? "(" + state.unseenArrivals + ") New order - " + BASE_TITLE : BASE_TITLE;
+  }
+
+  // Looking at the page again counts as having seen them.
+  function clearUnseenArrivals(){
+    if (!state.unseenArrivals) return;
+    state.unseenArrivals = 0;
+    updateArrivalTitle();
+  }
+  window.addEventListener("focus", clearUnseenArrivals);
+  document.addEventListener("visibilitychange", function(){ if (!document.hidden) clearUnseenArrivals(); });
+
+  // A short two-note chime made in the browser, no sound file needed.
+  // Browsers only let a page make sound after someone has clicked on it,
+  // which anyone working the board already has; otherwise it's silent and
+  // the highlight and title still show.
+  function playArrivalChime(){
+    try {
+      var Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return;
+      var ctx = playArrivalChime.ctx || (playArrivalChime.ctx = new Ctx());
+      if (ctx.state === "suspended" && ctx.resume) ctx.resume();
+      [[0, 784], [0.2, 1047]].forEach(function(note){
+        var start = ctx.currentTime + note[0];
+        var osc = ctx.createOscillator();
+        var gain = ctx.createGain();
+        osc.frequency.value = note[1];
+        gain.gain.setValueAtTime(0.0001, start);
+        gain.gain.exponentialRampToValueAtTime(0.3, start + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.35);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(start);
+        osc.stop(start + 0.4);
+      });
+    } catch (e) { /* no sound is fine; the highlight still shows */ }
   }
 
   function startChannelAutoRefresh(cfg){
@@ -1852,6 +1949,7 @@
     // for a single flat list.
     var byNewest = function(a, b){ return new Date(b.created_at) - new Date(a.created_at); };
     var orders = captures.filter(function(v){ return v.capture_type === "order"; });
+    var catering = captures.filter(function(v){ return v.capture_type === "catering"; }).sort(byNewest);
     var appts = captures.filter(function(v){ return v.capture_type === "appointment"; }).sort(byNewest);
     var inquiries = captures.filter(function(v){ return v.capture_type === "general_inquiry" || v.capture_type === "lead"; }).sort(byNewest);
 
@@ -1859,7 +1957,7 @@
     var ordersHtml = orderGroupOrder.map(function(st){
       var group = orders.filter(function(o){ return o.status === st; }).sort(byNewest);
       if (!group.length) return "";
-      return '<div style="margin-bottom:12px"><div class="eg-small" style="font-weight:700;margin-bottom:6px">' + channelStatusLabel(st) + ' <span class="eg-muted" style="font-weight:500">(' + group.length + ')</span></div>' +
+      return '<div style="margin-bottom:12px"><div class="eg-small" style="font-weight:700;margin-bottom:6px">' + (ORDER_STATUS_LABEL[st] || channelStatusLabel(st)) + ' <span class="eg-muted" style="font-weight:500">(' + group.length + ')</span></div>' +
         '<div class="eg-tilegrid">' + group.map(function(v){ return renderCaptureTile(v, cfg); }).join("") + '</div></div>';
     }).join("");
 
@@ -1871,7 +1969,8 @@
     };
 
     var sections = "";
-    if (orders.length) sections += sectionHtml("Orders", "New → In Progress → Ready", orders.length, ordersHtml);
+    if (orders.length) sections += sectionHtml("Orders", "Approve → In Progress → Ready", orders.length, ordersHtml);
+    if (catering.length) sections += sectionHtml("Catering requests", "Call back to discuss", catering.length, '<div class="eg-tilegrid">' + catering.map(function(v){ return renderCaptureTile(v, cfg); }).join("") + '</div>');
     if (appts.length) sections += sectionHtml("Appointments", "Newest first", appts.length, '<div class="eg-tilegrid">' + appts.map(function(v){ return renderCaptureTile(v, cfg); }).join("") + '</div>');
     if (inquiries.length) sections += sectionHtml("Inquiries & Leads", "Newest first", inquiries.length, '<div class="eg-tilegrid">' + inquiries.map(function(v){ return renderCaptureTile(v, cfg); }).join("") + '</div>');
 
@@ -1884,10 +1983,114 @@
   // just factored out so channelActivityHtml() can call it once per
   // section (Orders/Appointments/Inquiries & Leads) instead of once for a
   // single undifferentiated list.
+  // ---- The order card: who, pickup or delivery and when, each item on its
+  // own line, warnings, then Approve/Reject while it's waiting on staff.
+  var ORDER_LEVEL_DETAIL_KEYS = ["fulfillment", "order_time", "delivery_address", "heard_as", "items"];
+  var ORDER_LINE_NAME_KEYS = ["item", "name", "dish"];
+  var ORDER_LINE_QTY_KEYS = ["quantity", "qty", "count"];
+
+  function orderLineItems(details){
+    if (!details) return [];
+    if (Array.isArray(details.items) && details.items.length) return details.items;
+    var flat = {};
+    Object.keys(details).forEach(function(k){ if (ORDER_LEVEL_DETAIL_KEYS.indexOf(k) === -1) flat[k] = details[k]; });
+    return Object.keys(flat).length ? [flat] : [];
+  }
+
+  function orderLineHtml(line, heardAs){
+    if (!line || typeof line !== "object") return '<li><span>' + esc(formatDetailValue(line)) + '</span></li>';
+    var name = "", qty = "", notes = [];
+    Object.keys(line).forEach(function(k){
+      var value = formatDetailValue(line[k]);
+      if (value === "") return;
+      if (!name && ORDER_LINE_NAME_KEYS.indexOf(k) !== -1) name = value;
+      else if (!qty && ORDER_LINE_QTY_KEYS.indexOf(k) !== -1) qty = value;
+      else notes.push(value);
+    });
+    var heard = name && heardAs && heardAs[name] ? ' <span class="heard">(heard as &ldquo;' + esc(heardAs[name]) + '&rdquo;)</span>' : "";
+    return '<li><span class="qty">' + esc(qty ? qty + " ×" : "1 ×") + '</span><span>' + esc(name || notes.shift() || "Item") + heard +
+      (notes.length ? ' <span class="note">&mdash; ' + esc(notes.join(", ")) + '</span>' : '') + '</span></li>';
+  }
+
+  function orderAge(createdAt){
+    var minutes = Math.max(0, Math.round((Date.now() - new Date(createdAt).getTime()) / 60000));
+    if (minutes < 1) return { text: "just now", minutes: 0 };
+    if (minutes < 60) return { text: minutes + " min ago", minutes: minutes };
+    return { text: Math.floor(minutes / 60) + " h " + (minutes % 60) + " min ago", minutes: minutes };
+  }
+
+  function orderFulfillmentHtml(details){
+    var kind = details && details.fulfillment;
+    var when = details && details.order_time;
+    if (kind !== "pickup" && kind !== "delivery") {
+      return '<div class="eg-order-fulfil"><span>Pickup or delivery not given &mdash; check the transcript</span></div>';
+    }
+    var whenText = when ? (when === "as soon as possible" ? "ASAP" : when) : "time not given";
+    return '<div class="eg-order-fulfil">' + (kind === "pickup" ? "Pickup" : "Delivery") + ' &middot; ' + esc(whenText) + '</div>' +
+      (kind === "delivery"
+        ? '<div class="eg-small" style="margin-top:2px">' + esc(details.delivery_address || "No address given") + '</div>'
+        : '');
+  }
+
+  function orderFlagsHtml(flags){
+    if (!flags || !flags.length) return "";
+    return '<div class="eg-flags">' + flags.map(function(f){
+      var label = ORDER_FLAG_LABEL[f] || { text: channelStatusLabel(f), red: false };
+      return '<span class="eg-flag' + (label.red ? ' red' : '') + '">&#9888; ' + esc(label.text) + '</span>';
+    }).join("") + '</div>';
+  }
+
+  function orderActionsHtml(v, cfg){
+    var act = function(status, label, cls, confirmText){
+      return '<button class="eg-btn small ' + cls + '" data-channel-action="' + cfg.key + '" data-channel-action-id="' + esc(v.id) +
+        '" data-channel-action-status="' + status + '"' + (confirmText ? ' data-channel-action-confirm="' + esc(confirmText) + '"' : '') + '>' + label + '</button>';
+    };
+    var view = '<button class="eg-btn small ghost" data-channel-drawer="' + cfg.key + '" data-channel-drawer-id="' + esc(v.id) + '">View</button>';
+    var phone = v.contact.phone || "the customer";
+    if (v.status === "new") {
+      return '<div class="eg-vtile-actions">' + act("in_progress", "Approve", "approve") +
+        act("cancelled", "Reject", "reject", "Reject this order? The customer was told we'd call if there's a problem, so please call " + phone + " to let them know.") +
+        view + '</div>';
+    }
+    if (v.status === "completed" || v.status === "cancelled") return "";
+    var next = CHANNEL_NEXT_STATUS[v.status];
+    return '<div class="eg-vtile-actions">' + (next ? act(next, esc(CHANNEL_NEXT_LABEL[v.status]), "") : "") + view +
+      act("cancelled", "Cancel", "ghost") + '</div>';
+  }
+
+  function renderOrderTile(v, cfg){
+    var details = v.details || {};
+    var lines = orderLineItems(details);
+    var age = orderAge(v.created_at);
+    var late = v.status === "new" && age.minutes >= ORDER_LATE_MINUTES;
+    var hasName = !!v.contact.name;
+    var statusText = v.review_decision === "rejected" ? "Rejected" : (ORDER_STATUS_LABEL[v.status] || channelStatusLabel(v.status));
+    var badgeColor = v.review_decision === "rejected" ? "red" : (v.status === "new" ? "amber" : (CHANNEL_STATUS_BADGE[v.status] || "navy"));
+    return '<div class="eg-vtile red' + (isNewArrival(v.id) ? ' is-new-arrival' : '') + '" data-channel-drawer="' + cfg.key + '" data-channel-drawer-id="' + esc(v.id) + '">' +
+      '<div class="eg-vtile-top">' +
+      '<div><div class="eg-order-ref">' + CHANNEL_TYPE_ICON.order + ' ORDER #' + esc(String(v.id).slice(0, 6).toUpperCase()) + '</div>' +
+      '<div class="eg-order-age' + (late ? ' late' : '') + '">' + esc(age.text) + '</div></div>' +
+      '<span class="eg-pill ' + badgeColor + '">' + esc(statusText) + '</span>' +
+      '</div>' +
+      '<div class="eg-vtile-name">' + esc(hasName ? v.contact.name : (v.contact.phone || "Unknown caller")) +
+      (v.contact.is_test ? ' <span class="eg-tag" style="background:#f7d774">TEST</span>' : '') + '</div>' +
+      (hasName ? '<div class="eg-vtile-phone">' + esc(v.contact.phone || "-") + '</div>' : '') +
+      orderFulfillmentHtml(details) +
+      (lines.length
+        ? '<ul class="eg-order-lines">' + lines.map(function(l){ return orderLineHtml(l, details.heard_as); }).join("") + '</ul>'
+        : '<div class="eg-vtile-headline">' + esc(v.summary) + '</div>') +
+      orderFlagsHtml(v.flags) +
+      orderActionsHtml(v, cfg) +
+      '</div>';
+  }
+
   function renderCaptureTile(v, cfg){
+    if (v.capture_type === "order") return renderOrderTile(v, cfg);
     var typeColor = CHANNEL_TYPE_COLOR[v.capture_type] || "gray";
     var badgeColor = CHANNEL_STATUS_BADGE[v.status] || "navy";
-    var isInquiry = v.capture_type === "general_inquiry";
+    // A catering request is like an inquiry: nothing to run through stages,
+    // the owner calls back and marks it handled.
+    var isInquiry = v.capture_type === "general_inquiry" || v.capture_type === "catering";
     var nextStatus = CHANNEL_NEXT_STATUS[v.status];
     var isDone = v.status === "completed" || v.status === "cancelled";
 
@@ -1896,7 +2099,7 @@
       if (!isDone) {
         actionsHtml = '<div class="eg-vtile-actions">' +
           '<button class="eg-btn small ghost" data-channel-drawer="' + cfg.key + '" data-channel-drawer-id="' + esc(v.id) + '">View Details</button>' +
-          '<button class="eg-btn small ghost" data-channel-action="' + cfg.key + '" data-channel-action-id="' + esc(v.id) + '" data-channel-action-status="completed">Dismiss</button>' +
+          '<button class="eg-btn small ghost" data-channel-action="' + cfg.key + '" data-channel-action-id="' + esc(v.id) + '" data-channel-action-status="completed">' + (v.capture_type === "catering" ? "Mark handled" : "Dismiss") + '</button>' +
           '</div>';
       }
     } else if (!isDone) {
@@ -1920,7 +2123,7 @@
     var hasName = !!v.contact.name;
     var heading = hasName ? v.contact.name : (v.contact.phone || "Unknown");
 
-    return '<div class="eg-vtile ' + typeColor + '" data-channel-drawer="' + cfg.key + '" data-channel-drawer-id="' + esc(v.id) + '">' +
+    return '<div class="eg-vtile ' + typeColor + (isNewArrival(v.id) ? ' is-new-arrival' : '') + '" data-channel-drawer="' + cfg.key + '" data-channel-drawer-id="' + esc(v.id) + '">' +
       '<div class="eg-vtile-top">' +
       '<div><div class="eg-vtile-name">' + esc(heading) + (v.contact.is_test ? ' <span class="eg-tag" style="background:#f7d774">TEST</span>' : '') + '</div>' +
       (hasName ? '<div class="eg-vtile-phone">' + esc(v.contact.phone || "-") + '</div>' : '') + '</div>' +
@@ -1972,6 +2175,8 @@
         e.stopPropagation();
         var captureId = el.getAttribute("data-channel-action-id");
         var newStatus = el.getAttribute("data-channel-action-status");
+        var confirmText = el.getAttribute("data-channel-action-confirm");
+        if (confirmText && !window.confirm(confirmText)) return;
         el.disabled = true;
         api("/api/v1/crm/voice-captures/" + captureId, { method: "PATCH", body: { status: newStatus } })
           .then(function(){ loadChannelCaptures(cfg); })
@@ -2008,6 +2213,15 @@
       '<button class="eg-drawer-close" id="' + cfg.idPrefix + 'DrawerClose" aria-label="Close">&times;</button>' +
       '<h2>' + esc(d.contact.name || "Unknown") + (d.contact.is_test ? ' <span class="eg-tag" style="background:#f7d774">TEST</span>' : '') + '</h2>' +
       '<div class="eg-drawer-sub">' + esc(channelTypeLabel(d.capture_type)) + '</div>' +
+      (d.capture_type === "order"
+        ? orderFulfillmentHtml(d.details || {}) + orderFlagsHtml(d.flags) +
+          (d.review_decision
+            ? '<div class="eg-small eg-muted" style="margin-top:6px">' + (d.review_decision === "approved" ? "Approved" : "Rejected") +
+              (d.reviewed_at ? " " + fmtDate(d.reviewed_at) : "") + '</div>'
+            : (d.status === "new"
+              ? '<div class="eg-small" style="margin-top:6px;color:var(--amber)">Waiting for approval. The customer was told it was sent to your team to confirm.</div>'
+              : ""))
+        : "") +
       '<h4>' + esc(cfg.contactLabel) + '</h4>' +
       '<div class="eg-kv"><span>Phone</span><b>' + esc(d.contact.phone || "-") + '</b></div>' +
       '<div class="eg-kv"><span>Email</span><b>' + esc(d.contact.email || "-") + '</b></div>' +
@@ -2056,6 +2270,11 @@
   var VOICE_SETTINGS_DAYS = [
     ["mon", "Mon"], ["tue", "Tue"], ["wed", "Wed"], ["thu", "Thu"], ["fri", "Fri"], ["sat", "Sat"], ["sun", "Sun"]
   ];
+  // Must match VOICE_AUDIENCES in the backend's app/voice_settings.py. ""
+  // saves as not chosen, which is US English.
+  var VOICE_AUDIENCE_OPTIONS = [
+    ["", "US English (default)"], ["en-IN", "Indian English"], ["en-GB", "UK English"], ["en-AU", "Australian English"]
+  ];
 
   function loadVoiceSettings(){
     api("/api/v1/voice-settings").then(function(d){ state.voiceSettings = d; render(); })
@@ -2081,9 +2300,17 @@
     }).join("");
 
     var defaultTag = ' <span class="eg-small eg-muted">(default)</span>';
+    var audienceSelect = '<select class="eg-select" id="egVoiceAudience" style="max-width:280px">' +
+      VOICE_AUDIENCE_OPTIONS.map(function(o){
+        return '<option value="' + o[0] + '"' + ((s.voice_audience || "") === o[0] ? " selected" : "") + '>' + esc(o[1]) + '</option>';
+      }).join("") + '</select>';
 
     return '<div class="eg-card" style="margin-bottom:14px">' +
       '<div class="eg-row"><h3>Voice AI Call Settings</h3><button class="eg-btn ghost small" id="egVoiceSettingsToggle">Close</button></div>' +
+      '<div class="eg-form-row"><label>Who mostly calls you?</label>' + audienceSelect +
+      '<div class="eg-small eg-muted" style="margin-top:4px">Tunes how the assistant hears callers and the voice it speaks with. Pick the accent most of your callers have; everyone can still call.</div></div>' +
+      '<div class="eg-form-row"><label>Words callers often say <span class="eg-small eg-muted">(dish names and other words the assistant might mishear, separated by commas)</span></label>' +
+      '<textarea class="eg-textarea" id="egVoiceSpeechHints" placeholder="Butter Naan, Malai Kofta, Gulab Jamun">' + esc(s.voice_speech_hints || "") + '</textarea></div>' +
       '<div class="eg-form-row"><label>Welcome Message' + (s.is_welcome_message_default ? defaultTag : "") + '</label><textarea class="eg-textarea" id="egVoiceWelcomeMsg">' + esc(s.welcome_message) + '</textarea></div>' +
       '<div class="eg-form-row"><label>Human Handoff Number' + (s.human_handoff_number_masked ? ' <span class="eg-small eg-muted">(currently ' + esc(s.human_handoff_number_masked) + ')</span>' : "") + '</label>' +
       '<input class="eg-input" id="egVoiceHandoffNumber" placeholder="+12015550172, leave blank to keep unchanged" /></div>' +
@@ -2131,7 +2358,9 @@
         timezone: document.getElementById("egVoiceTimezone").value.trim() || null,
         business_hours: businessHours,
         after_hours_message: document.getElementById("egVoiceAfterHoursMsg").value,
-        emergency_message: document.getElementById("egVoiceEmergencyMsg").value
+        emergency_message: document.getElementById("egVoiceEmergencyMsg").value,
+        voice_audience: document.getElementById("egVoiceAudience").value,
+        voice_speech_hints: document.getElementById("egVoiceSpeechHints").value
       };
       // Blank means "leave it as it is" here, not "clear it" - unlike the
       // message fields, an empty Human Handoff Number field is far more
@@ -3752,7 +3981,13 @@
       loadVoiceSettings: loadVoiceSettings,
       startChannelAutoRefresh: startChannelAutoRefresh,
       hasActiveChannelAutoRefresh: function(){ return !!state._channelRefreshTimer; },
-      CHANNEL_ACTIVITY: CHANNEL_ACTIVITY
+      CHANNEL_ACTIVITY: CHANNEL_ACTIVITY,
+      channelActivityHtml: channelActivityHtml,
+      bindChannelActivity: bindChannelActivity,
+      channelDrawerHtml: channelDrawerHtml,
+      noteNewArrivals: noteNewArrivals,
+      voiceSettingsPanelHtml: voiceSettingsPanelHtml,
+      bindVoiceSettingsPanel: bindVoiceSettingsPanel
     };
     // A plain "state: state" property would snapshot the object that
     // existed at load time - doLogout() now reassigns the state variable
