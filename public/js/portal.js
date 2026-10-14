@@ -1661,9 +1661,9 @@
   // a page reload.
   var CHANNEL_ACTIVE_STATUSES = ["new", "in_progress", "ready"];
   var CHANNEL_REFRESH_MS = 7000;
-  var CHANNEL_TYPE_COLOR = { order: "red", catering: "amber", appointment: "purple", lead: "green", general_inquiry: "blue" };
-  var CHANNEL_TYPE_ICON = { order: "&#128722;", catering: "&#127869;", appointment: "&#128197;", lead: "&#128100;", general_inquiry: "&#128172;" };
-  var CHANNEL_TYPE_OPTIONS = ["order", "catering", "appointment", "lead", "general_inquiry"];
+  var CHANNEL_TYPE_COLOR = { order: "red", reservation: "purple", catering: "amber", appointment: "purple", lead: "green", general_inquiry: "blue" };
+  var CHANNEL_TYPE_ICON = { order: "&#128722;", reservation: "&#127860;", catering: "&#127869;", appointment: "&#128197;", lead: "&#128100;", general_inquiry: "&#128172;" };
+  var CHANNEL_TYPE_OPTIONS = ["order", "reservation", "catering", "appointment", "lead", "general_inquiry"];
   // A new order is waiting on staff: the caller was told it was "sent to
   // our team to confirm", so it's approved (-> In Progress) or rejected
   // (-> Cancelled) before anything else - the backend refuses any other
@@ -1790,7 +1790,7 @@
   // doesn't sit unseen when nobody is looking at the board. Only for ones
   // created in the last few minutes, so changing a filter that reveals
   // older ones never sets it off.
-  var ARRIVAL_ALERT_TYPES = ["order", "catering"];
+  var ARRIVAL_ALERT_TYPES = ["order", "catering", "reservation", "appointment"];
   var ARRIVAL_RECENT_MS = 10 * 60 * 1000;
   var ARRIVAL_HIGHLIGHT_MS = 60 * 1000;
   var BASE_TITLE = document.title;
@@ -1798,7 +1798,7 @@
   function noteNewArrivals(cfg, captures){
     var knownKey = cfg.key + "KnownArrivalIds";
     var waiting = (captures || []).filter(function(v){
-      return ARRIVAL_ALERT_TYPES.indexOf(v.capture_type) !== -1 && v.status === "new";
+      return ARRIVAL_ALERT_TYPES.indexOf(v.capture_type) !== -1 && v.status === "new" && (v.needs_review || v.capture_type === "catering");
     });
     var known = state[knownKey];
     var now = Date.now();
@@ -1950,6 +1950,7 @@
     var byNewest = function(a, b){ return new Date(b.created_at) - new Date(a.created_at); };
     var orders = captures.filter(function(v){ return v.capture_type === "order"; });
     var catering = captures.filter(function(v){ return v.capture_type === "catering"; }).sort(byNewest);
+    var reservations = captures.filter(function(v){ return v.capture_type === "reservation"; }).sort(byNewest);
     var appts = captures.filter(function(v){ return v.capture_type === "appointment"; }).sort(byNewest);
     var inquiries = captures.filter(function(v){ return v.capture_type === "general_inquiry" || v.capture_type === "lead"; }).sort(byNewest);
 
@@ -1970,6 +1971,7 @@
 
     var sections = "";
     if (orders.length) sections += sectionHtml("Orders", "Approve → In Progress → Ready", orders.length, ordersHtml);
+    if (reservations.length) sections += sectionHtml("Reservations", "Approve → Confirmed", reservations.length, '<div class="eg-tilegrid">' + reservations.map(function(v){ return renderCaptureTile(v, cfg); }).join("") + '</div>');
     if (catering.length) sections += sectionHtml("Catering requests", "Call back to discuss", catering.length, '<div class="eg-tilegrid">' + catering.map(function(v){ return renderCaptureTile(v, cfg); }).join("") + '</div>');
     if (appts.length) sections += sectionHtml("Appointments", "Newest first", appts.length, '<div class="eg-tilegrid">' + appts.map(function(v){ return renderCaptureTile(v, cfg); }).join("") + '</div>');
     if (inquiries.length) sections += sectionHtml("Inquiries & Leads", "Newest first", inquiries.length, '<div class="eg-tilegrid">' + inquiries.map(function(v){ return renderCaptureTile(v, cfg); }).join("") + '</div>');
@@ -2040,32 +2042,95 @@
     }).join("") + '</div>';
   }
 
-  function orderActionsHtml(v, cfg){
+  // Orders, reservations, and booking requests that wait for staff share
+  // the same Approve / Reject step; once approved an order moves through
+  // Ready and Done, while a reservation or booking just needs Done.
+  var REQUEST_WORD = { order: "order", reservation: "reservation", appointment: "booking" };
+
+  function requestActionsHtml(v, cfg){
     var act = function(status, label, cls, confirmText){
       return '<button class="eg-btn small ' + cls + '" data-channel-action="' + cfg.key + '" data-channel-action-id="' + esc(v.id) +
         '" data-channel-action-status="' + status + '"' + (confirmText ? ' data-channel-action-confirm="' + esc(confirmText) + '"' : '') + '>' + label + '</button>';
     };
     var view = '<button class="eg-btn small ghost" data-channel-drawer="' + cfg.key + '" data-channel-drawer-id="' + esc(v.id) + '">View</button>';
     var phone = v.contact.phone || "the customer";
-    if (v.status === "new") {
+    var what = REQUEST_WORD[v.capture_type] || "request";
+    if (v.needs_review) {
       return '<div class="eg-vtile-actions">' + act("in_progress", "Approve", "approve") +
-        act("cancelled", "Reject", "reject", "Reject this order? The customer was told we'd call if there's a problem, so please call " + phone + " to let them know.") +
+        act("cancelled", "Reject", "reject", "Reject this " + what + "? If the customer agreed to texts, they'll be texted that it couldn't be confirmed. Otherwise please call " + phone + " to let them know.") +
         view + '</div>';
     }
     if (v.status === "completed" || v.status === "cancelled") return "";
-    var next = CHANNEL_NEXT_STATUS[v.status];
-    return '<div class="eg-vtile-actions">' + (next ? act(next, esc(CHANNEL_NEXT_LABEL[v.status]), "") : "") + view +
+    var next = v.capture_type === "order" ? CHANNEL_NEXT_STATUS[v.status] : "completed";
+    var nextLabel = v.capture_type === "order" ? CHANNEL_NEXT_LABEL[v.status] : "Done";
+    return '<div class="eg-vtile-actions">' + (next ? act(next, esc(nextLabel), "") : "") + view +
       act("cancelled", "Cancel", "ghost") + '</div>';
+  }
+
+  // Whether the customer was texted staff's decision, so staff know when to
+  // call instead.
+  function textStatusHtml(v){
+    if (v.text_status === "sent") return '<div class="eg-text-status ok">&#10003; Customer texted</div>';
+    if (v.text_status === "failed") {
+      return '<div class="eg-text-status bad">Text not sent' + (v.text_error ? ': ' + esc(v.text_error) : '') +
+        ' &mdash; call ' + esc(v.contact.phone || "the customer") + '</div>';
+    }
+    return "";
+  }
+
+  // "Fri, Oct 16 · 7:00 PM" from the wall-clock date and time the customer
+  // asked for (no timezone conversion: these are the business's own clock).
+  function requestedWhenText(details){
+    if (!details) return "";
+    var d = details.requested_date, t = details.requested_time;
+    if (d && t && /^\d{4}-\d{2}-\d{2}$/.test(d)) {
+      var parts = d.split("-").map(Number);
+      var day = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
+      var dayText = day.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
+      var hm = String(t).split(":").map(Number);
+      var timeText = isNaN(hm[0]) ? String(t) : ((hm[0] % 12 || 12) + ":" + String(hm[1] || 0).padStart(2, "0") + " " + (hm[0] < 12 ? "AM" : "PM"));
+      return dayText + " · " + timeText;
+    }
+    return details.requested_when || (d ? d + (t ? " " + t : "") : "");
+  }
+
+  // A reservation, or a booking request at a business that approves
+  // bookings first: who, when, how many (or which service), then Approve /
+  // Reject while it waits.
+  function renderRequestTile(v, cfg){
+    var details = v.details || {};
+    var isReservation = v.capture_type === "reservation";
+    var age = orderAge(v.created_at);
+    var hasName = !!v.contact.name;
+    var statusText = v.review_decision === "rejected" ? "Rejected" : (v.needs_review ? "Awaiting approval" : (v.review_decision === "approved" && v.status === "in_progress" ? "Confirmed" : channelStatusLabel(v.status)));
+    var badgeColor = v.review_decision === "rejected" ? "red" : (v.needs_review ? "amber" : (v.status === "in_progress" ? "green" : (CHANNEL_STATUS_BADGE[v.status] || "navy")));
+    var typeColor = CHANNEL_TYPE_COLOR[v.capture_type] || "gray";
+    var what = isReservation
+      ? "Table for " + (details.party_size || "?")
+      : (formatDetailValue(details.service || details.services || "") || "Booking");
+    return '<div class="eg-vtile ' + typeColor + (isNewArrival(v.id) ? ' is-new-arrival' : '') + '" data-channel-drawer="' + cfg.key + '" data-channel-drawer-id="' + esc(v.id) + '">' +
+      '<div class="eg-vtile-top">' +
+      '<div><div class="eg-order-ref">' + CHANNEL_TYPE_ICON[v.capture_type] + ' ' + (isReservation ? "RESERVATION" : "BOOKING REQUEST") + '</div>' +
+      '<div class="eg-order-age' + (v.needs_review && age.minutes >= ORDER_LATE_MINUTES ? ' late' : '') + '">' + esc(age.text) + '</div></div>' +
+      '<span class="eg-pill ' + badgeColor + '">' + esc(statusText) + '</span>' +
+      '</div>' +
+      '<div class="eg-vtile-name">' + esc(hasName ? v.contact.name : (v.contact.phone || "Unknown caller")) +
+      (v.contact.is_test ? ' <span class="eg-tag" style="background:#f7d774">TEST</span>' : '') + '</div>' +
+      (hasName ? '<div class="eg-vtile-phone">' + esc(v.contact.phone || "-") + '</div>' : '') +
+      '<div class="eg-order-fulfil">' + esc(what) + ' &middot; ' + esc(requestedWhenText(details) || "time not given") + '</div>' +
+      textStatusHtml(v) +
+      requestActionsHtml(v, cfg) +
+      '</div>';
   }
 
   function renderOrderTile(v, cfg){
     var details = v.details || {};
     var lines = orderLineItems(details);
     var age = orderAge(v.created_at);
-    var late = v.status === "new" && age.minutes >= ORDER_LATE_MINUTES;
+    var late = v.needs_review && age.minutes >= ORDER_LATE_MINUTES;
     var hasName = !!v.contact.name;
-    var statusText = v.review_decision === "rejected" ? "Rejected" : (ORDER_STATUS_LABEL[v.status] || channelStatusLabel(v.status));
-    var badgeColor = v.review_decision === "rejected" ? "red" : (v.status === "new" ? "amber" : (CHANNEL_STATUS_BADGE[v.status] || "navy"));
+    var statusText = v.review_decision === "rejected" ? "Rejected" : (v.needs_review ? ORDER_STATUS_LABEL["new"] : channelStatusLabel(v.status));
+    var badgeColor = v.review_decision === "rejected" ? "red" : (v.needs_review ? "amber" : (CHANNEL_STATUS_BADGE[v.status] || "navy"));
     return '<div class="eg-vtile red' + (isNewArrival(v.id) ? ' is-new-arrival' : '') + '" data-channel-drawer="' + cfg.key + '" data-channel-drawer-id="' + esc(v.id) + '">' +
       '<div class="eg-vtile-top">' +
       '<div><div class="eg-order-ref">' + CHANNEL_TYPE_ICON.order + ' ORDER #' + esc(String(v.id).slice(0, 6).toUpperCase()) + '</div>' +
@@ -2079,13 +2144,16 @@
       (lines.length
         ? '<ul class="eg-order-lines">' + lines.map(function(l){ return orderLineHtml(l, details.heard_as); }).join("") + '</ul>'
         : '<div class="eg-vtile-headline">' + esc(v.summary) + '</div>') +
-      orderFlagsHtml(v.flags) +
-      orderActionsHtml(v, cfg) +
+      orderFlagsHtml(v.flags) + textStatusHtml(v) +
+      requestActionsHtml(v, cfg) +
       '</div>';
   }
 
   function renderCaptureTile(v, cfg){
     if (v.capture_type === "order") return renderOrderTile(v, cfg);
+    if (v.capture_type === "reservation" || (v.capture_type === "appointment" && (v.needs_review || v.review_decision))) {
+      return renderRequestTile(v, cfg);
+    }
     var typeColor = CHANNEL_TYPE_COLOR[v.capture_type] || "gray";
     var badgeColor = CHANNEL_STATUS_BADGE[v.status] || "navy";
     // A catering request is like an inquiry: nothing to run through stages,
@@ -2213,15 +2281,17 @@
       '<button class="eg-drawer-close" id="' + cfg.idPrefix + 'DrawerClose" aria-label="Close">&times;</button>' +
       '<h2>' + esc(d.contact.name || "Unknown") + (d.contact.is_test ? ' <span class="eg-tag" style="background:#f7d774">TEST</span>' : '') + '</h2>' +
       '<div class="eg-drawer-sub">' + esc(channelTypeLabel(d.capture_type)) + '</div>' +
-      (d.capture_type === "order"
-        ? orderFulfillmentHtml(d.details || {}) + orderFlagsHtml(d.flags) +
-          (d.review_decision
-            ? '<div class="eg-small eg-muted" style="margin-top:6px">' + (d.review_decision === "approved" ? "Approved" : "Rejected") +
-              (d.reviewed_at ? " " + fmtDate(d.reviewed_at) : "") + '</div>'
-            : (d.status === "new"
-              ? '<div class="eg-small" style="margin-top:6px;color:var(--amber)">Waiting for approval. The customer was told it was sent to your team to confirm.</div>'
-              : ""))
+      (d.capture_type === "order" ? orderFulfillmentHtml(d.details || {}) + orderFlagsHtml(d.flags) : "") +
+      (d.capture_type === "reservation" || (d.capture_type === "appointment" && (d.needs_review || d.review_decision))
+        ? '<div class="eg-order-fulfil">' + esc(requestedWhenText(d.details) || "Time not given") + '</div>'
         : "") +
+      (d.review_decision
+        ? '<div class="eg-small eg-muted" style="margin-top:6px">' + (d.review_decision === "approved" ? "Approved" : "Rejected") +
+          (d.reviewed_at ? " " + fmtDate(d.reviewed_at) : "") + '</div>'
+        : (d.needs_review
+          ? '<div class="eg-small" style="margin-top:6px;color:var(--amber)">Waiting for approval. The customer was told it was sent to your team to confirm.</div>'
+          : "")) +
+      textStatusHtml(d) +
       '<h4>' + esc(cfg.contactLabel) + '</h4>' +
       '<div class="eg-kv"><span>Phone</span><b>' + esc(d.contact.phone || "-") + '</b></div>' +
       '<div class="eg-kv"><span>Email</span><b>' + esc(d.contact.email || "-") + '</b></div>' +
@@ -2311,6 +2381,13 @@
       '<div class="eg-small eg-muted" style="margin-top:4px">Tunes how the assistant hears callers and the voice it speaks with. Pick the accent most of your callers have; everyone can still call.</div></div>' +
       '<div class="eg-form-row"><label>Words callers often say <span class="eg-small eg-muted">(dish names and other words the assistant might mishear, separated by commas)</span></label>' +
       '<textarea class="eg-textarea" id="egVoiceSpeechHints" placeholder="Butter Naan, Malai Kofta, Gulab Jamun">' + esc(s.voice_speech_hints || "") + '</textarea></div>' +
+      '<div class="eg-form-row"><label>Callers book</label>' +
+      '<select class="eg-select" id="egBookingKind" style="max-width:280px">' +
+      '<option value="appointment"' + (s.booking_kind !== "reservation" ? " selected" : "") + '>Appointments (checked against your calendar)</option>' +
+      '<option value="reservation"' + (s.booking_kind === "reservation" ? " selected" : "") + '>Table reservations (party size and time)</option>' +
+      '</select></div>' +
+      '<div class="eg-form-row"><label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="egBookingsNeedApproval"' + (s.bookings_need_approval ? " checked" : "") + ' />Staff approve bookings before they\'re confirmed</label>' +
+      '<div class="eg-small eg-muted" style="margin-top:4px">On: a booking made by phone or WhatsApp waits on this page for Approve or Reject, and only then goes on the calendar. Off: it\'s booked straight away. Orders and table reservations always wait for approval. Customers who agree to texts are texted the decision.</div></div>' +
       '<div class="eg-form-row"><label>Welcome Message' + (s.is_welcome_message_default ? defaultTag : "") + '</label><textarea class="eg-textarea" id="egVoiceWelcomeMsg">' + esc(s.welcome_message) + '</textarea></div>' +
       '<div class="eg-form-row"><label>Human Handoff Number' + (s.human_handoff_number_masked ? ' <span class="eg-small eg-muted">(currently ' + esc(s.human_handoff_number_masked) + ')</span>' : "") + '</label>' +
       '<input class="eg-input" id="egVoiceHandoffNumber" placeholder="+12015550172, leave blank to keep unchanged" /></div>' +
@@ -2360,7 +2437,9 @@
         after_hours_message: document.getElementById("egVoiceAfterHoursMsg").value,
         emergency_message: document.getElementById("egVoiceEmergencyMsg").value,
         voice_audience: document.getElementById("egVoiceAudience").value,
-        voice_speech_hints: document.getElementById("egVoiceSpeechHints").value
+        voice_speech_hints: document.getElementById("egVoiceSpeechHints").value,
+        booking_kind: document.getElementById("egBookingKind").value,
+        bookings_need_approval: document.getElementById("egBookingsNeedApproval").checked
       };
       // Blank means "leave it as it is" here, not "clear it" - unlike the
       // message fields, an empty Human Handoff Number field is far more

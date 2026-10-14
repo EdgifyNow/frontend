@@ -40,7 +40,15 @@ function jsonResponse(body) {
 
 function minutesAgo(n) { return new Date(Date.now() - n * 60000).toISOString(); }
 
+// needs_review follows status unless a test sets it: a New order waits for
+// staff, an approved or rejected one doesn't.
 function order(overrides) {
+  const o = makeOrder(overrides);
+  if (!overrides || overrides.needs_review === undefined) o.needs_review = o.status === "new" && !o.review_decision;
+  return o;
+}
+
+function makeOrder(overrides) {
   return Object.assign({
     id: "a1b2c3d4-0000-0000-0000-000000000001",
     conversation_id: "c1", external_call_id: "CA1", lead_id: "l1",
@@ -177,6 +185,78 @@ test("the caller audience and speech words are saved with the voice settings", a
   const body = put && JSON.parse(put.opts.body);
   assert(body && body.voice_audience === "en-GB", "the chosen audience is sent");
   assert(body && body.voice_speech_hints === "Butter Naan, Gulab Jamun", "the speech words are sent");
+});
+
+test("a reservation waiting for staff has its own section, party size, time, and Approve/Reject", () => {
+  const { hooks } = buildPage();
+  const cfg = hooks.CHANNEL_ACTIVITY.voice;
+  hooks.state.voiceCaptures = [order({
+    id: "res1", capture_type: "reservation", summary: "you'd like a table for 4 on Saturday, October 17 at 7:00 PM",
+    details: { party_size: 4, requested_date: "2026-10-17", requested_time: "19:00" }, flags: []
+  })];
+  const html = hooks.channelActivityHtml(cfg);
+  assert(html.includes(">Reservations <"), "a Reservations section");
+  assert(html.includes("Table for 4 &middot; Sat, Oct 17 · 7:00 PM"), "party size and the time asked for - got: " + (html.match(/Table for[^<]*/) || [""])[0]);
+  assert(html.includes(">Approve<") && html.includes(">Reject<"), "Approve and Reject");
+});
+
+test("a salon booking request waiting for staff gets Approve/Reject; once approved it reads Confirmed", () => {
+  const { hooks } = buildPage();
+  const cfg = hooks.CHANNEL_ACTIVITY.voice;
+  hooks.state.voiceStatusFilter = "all";
+  const booking = { capture_type: "appointment", summary: "a haircut", details: { service: "haircut", requested_date: "2026-10-20", requested_time: "15:00" }, flags: [] };
+  hooks.state.voiceCaptures = [order(Object.assign({ id: "b1" }, booking))];
+  let html = hooks.channelActivityHtml(cfg);
+  assert(html.includes("BOOKING REQUEST") && html.includes("haircut &middot; Tue, Oct 20 · 3:00 PM"), "the service and time");
+  assert(html.includes(">Approve<"), "Approve while it waits");
+
+  hooks.state.voiceCaptures = [order(Object.assign({ id: "b1", status: "in_progress", review_decision: "approved", text_status: "sent" }, booking))];
+  html = hooks.channelActivityHtml(cfg);
+  assert(html.includes(">Confirmed<"), "an approved booking reads Confirmed");
+  assert(html.includes('data-channel-action-status="completed">Done<') && !html.includes('data-channel-action-status="ready"'), "a booking is just marked Done, no Ready step");
+  assert(html.includes("Customer texted"), "the tile says the customer was texted");
+});
+
+test("an instantly booked appointment keeps its usual tile", () => {
+  const { hooks } = buildPage();
+  const cfg = hooks.CHANNEL_ACTIVITY.voice;
+  hooks.state.voiceCaptures = [order({ id: "a1", capture_type: "appointment", summary: "a haircut", details: { service: "haircut" }, needs_review: false, flags: [] })];
+  const html = hooks.channelActivityHtml(cfg);
+  assert(!html.includes("BOOKING REQUEST") && !html.includes(">Approve<"), "no approval step when the business books instantly");
+});
+
+test("a text that couldn't be sent says why and who to call", () => {
+  const { hooks } = buildPage();
+  const cfg = hooks.CHANNEL_ACTIVITY.voice;
+  hooks.state.voiceStatusFilter = "all";
+  hooks.state.voiceCaptures = [order({ status: "in_progress", review_decision: "approved", text_status: "failed", text_error: "No recorded SMS consent from this contact" })];
+  const html = hooks.channelActivityHtml(cfg);
+  assert(html.includes("Text not sent: No recorded SMS consent from this contact") && html.includes("call +12015550101"), "the reason and the number to call");
+});
+
+test("what callers book and whether staff approve first are saved with the voice settings", async () => {
+  const { win, hooks, fetchCalls, setFetchHandler } = buildPage();
+  hooks.state.voiceSettingsOpen = true;
+  hooks.state.voiceSettings = {
+    welcome_message: "Hi", is_welcome_message_default: true, human_handoff_number_masked: null,
+    transfer_message: "Hold", is_transfer_message_default: true, ring_timeout_seconds: 20,
+    no_answer_message: "Sorry", is_no_answer_message_default: true, timezone: "America/New_York",
+    business_hours: null, after_hours_message: "Closed", is_after_hours_message_default: true,
+    emergency_message: "", is_emergency_message_default: true, voice_audience: null, voice_speech_hints: "",
+    booking_kind: "appointment", bookings_need_approval: false
+  };
+  win.document.getElementById("egTest").innerHTML = hooks.voiceSettingsPanelHtml();
+  hooks.bindVoiceSettingsPanel();
+  setFetchHandler(() => jsonResponse(hooks.state.voiceSettings));
+
+  win.document.getElementById("egBookingKind").value = "reservation";
+  win.document.getElementById("egBookingsNeedApproval").checked = true;
+  win.document.getElementById("egVoiceSettingsSave").click();
+  await new Promise((r) => setTimeout(r, 0));
+
+  const body = JSON.parse(fetchCalls.find((c) => c.opts && c.opts.method === "PUT").opts.body);
+  assert(body.booking_kind === "reservation", "table reservations is sent");
+  assert(body.bookings_need_approval === true, "approve-first is sent");
 });
 
 (async () => {

@@ -119,6 +119,9 @@ a{text-decoration:none;color:inherit}
 .eg-flags{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
 .eg-flag{font-size:11px;font-weight:650;border-radius:6px;padding:3px 7px;background:#fff7df;color:#8a5a12;border:1px solid #f3dfa6}
 .eg-flag.red{background:#feecec;color:var(--red);border-color:#f5c9c9}
+.eg-text-status{font-size:11.5px;margin-top:8px;font-weight:600}
+.eg-text-status.ok{color:var(--green)}
+.eg-text-status.bad{color:var(--red)}
 .eg-btn.approve{background:var(--green);border-color:var(--green);color:#fff}
 .eg-btn.reject{background:#fff;color:var(--red);border:1px solid #f0b8b8}
 .eg-btn.small{padding:6px 10px;font-size:12px;border-radius:8px}
