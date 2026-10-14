@@ -67,6 +67,11 @@
     appointmentStatusFilter: "all",
     appointmentPage: 1,
     appointmentDrawerId: null,
+    // The "Book a meeting" form. null = closed. Kept in state (not read
+    // only from the DOM at click time) because the page re-renders itself
+    // whenever a background fetch lands - without a draft, whatever the
+    // owner had typed so far would be wiped mid-entry.
+    bookingDraft: null,
     widgetKey: undefined, // undefined = not fetched yet, null = fetched, none exists
     integrationConnections: null, // GET /integrations/connections - see googleCalendarConnection()
     widgetIdDraft: "",
@@ -283,7 +288,12 @@
     if (AND(!isForm, opts.body)) headers["Content-Type"] = "application/json";
     return fetch(API_BASE + path, { method: opts.method || "GET", headers: headers, body: opts.body })
       .then(function(res){
-        if (res.status === 401) {
+        // keepSessionOn401: a 401 normally means the login token expired,
+        // so everything else logs out. change-password is the exception -
+        // a wrong *current password* can also come back as a 401, and
+        // logging the owner out for a typo would be wrong. That caller
+        // checks /auth/me itself to tell the two apart.
+        if (res.status === 401 && !opts.keepSessionOn401) {
           doLogout();
           var e = new Error("Session expired. Please log in again.");
           throw e;
@@ -294,9 +304,22 @@
           if (!res.ok) {
             var msg = "Request failed (" + res.status + ")";
             if (data ? data.detail : false) {
-              msg = typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail);
+              if (typeof data.detail === "string") {
+                msg = data.detail;
+              } else if (Array.isArray(data.detail)) {
+                // FastAPI validation errors: [{loc:["body","new_password"], msg:"..."}]
+                // - show the human sentence, not the raw JSON.
+                msg = data.detail.map(function(d){
+                  var field = d && d.loc && d.loc.length ? String(d.loc[d.loc.length - 1]).replace(/_/g, " ") : "";
+                  return (field ? field + ": " : "") + ((d && d.msg) || JSON.stringify(d));
+                }).join("; ");
+              } else {
+                msg = JSON.stringify(data.detail);
+              }
             }
-            throw new Error(msg);
+            var err = new Error(msg);
+            err.status = res.status;
+            throw err;
           }
           return data;
         });
@@ -663,7 +686,7 @@
       '</div>' +
       '<div id="egContent"></div>' +
       '</main>' +
-      '</div>' + toastHtml + leadDrawerHtml() + contactDrawerHtml() + appointmentDrawerHtml() + voiceDrawerHtml() + whatsappDrawerHtml();
+      '</div>' + toastHtml + leadDrawerHtml() + contactDrawerHtml() + appointmentDrawerHtml() + bookingDrawerHtml() + voiceDrawerHtml() + whatsappDrawerHtml();
 
     document.querySelectorAll("[data-nav]").forEach(function(el){
       el.addEventListener("click", function(){
@@ -675,6 +698,7 @@
     bindDrawer();
     bindContactDrawer();
     bindAppointmentDrawer();
+    bindBookingDrawer();
     bindAllChannelDrawers();
 
     renderContent();
@@ -1200,23 +1224,40 @@
       '<div class="eg-toolbar">' +
       '<input id="egAppointmentSearch" placeholder="Search by contact, email, phone..." value="' + esc(state.appointmentSearch) + '" />' +
       '<select id="egAppointmentStatusFilter">' + selOpts(["all"].concat(APPT_STATUS_OPTIONS).map(function(s){ return { value: s, label: s === "all" ? "All Statuses" : appointmentStatusLabel(s) }; }), state.appointmentStatusFilter) + '</select>' +
+      '<button class="eg-btn" id="egBookAppointmentBtn">+ Book Appointment</button>' +
       '</div>' +
       (rows ? '<table class="eg-table"><thead><tr><th>Contact</th><th>When</th><th>Status</th><th>Location</th><th>Booked</th><th>Actions</th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div class="eg-empty">' + (state.appointmentSearch ? "No matching appointments." : "No appointments yet.") + '</div>') +
       pagerHtml("egAppointment", page, "appointments") +
       '</div>';
   }
+  // start_at/end_at come back as UTC ISO strings; a datetime-local input
+  // needs local wall-clock time with no trailing Z, hence the slice.
+  function isoToLocalInput(iso){
+    if (!iso) return "";
+    var d = new Date(iso);
+    d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+    return d.toISOString().slice(0, 16);
+  }
+  // The edit drawer can be opened from the Appointments tab (every
+  // appointment, in state.allAppointments) or from inside a lead's own
+  // drawer (just that lead's, in state.leadAppointments) - look in both.
+  // Appointments from the lead drawer don't carry the contact the way the
+  // merged list does, so attach it from the lead.
+  function findAppointment(id){
+    var a = (state.allAppointments || []).filter(function(x){ return x.id === id; })[0]
+      || (state.leadAppointments || []).filter(function(x){ return x.id === id; })[0];
+    if (!a) return null;
+    if (a.contact) return a;
+    var copy = {}; for (var k in a) copy[k] = a[k];
+    var lead = joinedLeads().filter(function(l){ return l.id === a.lead_id; })[0];
+    copy.contact = lead ? lead.contact : null;
+    return copy;
+  }
   function appointmentDrawerHtml(){
     if (!state.appointmentDrawerId) return "";
-    var a = (state.allAppointments || []).filter(function(x){ return x.id === state.appointmentDrawerId; })[0];
+    var a = findAppointment(state.appointmentDrawerId);
     if (!a) return "";
-    // start_at/end_at come back as UTC ISO strings; a datetime-local input
-    // needs local wall-clock time with no trailing Z, hence the slice.
-    function toLocalInputValue(iso){
-      if (!iso) return "";
-      var d = new Date(iso);
-      d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
-      return d.toISOString().slice(0, 16);
-    }
+    var toLocalInputValue = isoToLocalInput;
     var statusSelect = '<select class="eg-select" id="egApptDrawerStatus">' + APPT_STATUS_OPTIONS.map(function(s){
       return '<option value="' + s + '"' + (s === a.status ? " selected" : "") + '>' + appointmentStatusLabel(s) + '</option>';
     }).join("") + '</select>';
@@ -1245,7 +1286,7 @@
     var saveBtn = document.getElementById("egApptDrawerSave");
     if (saveBtn) saveBtn.addEventListener("click", function(){
       var id = state.appointmentDrawerId;
-      var original = (state.allAppointments || []).filter(function(a){ return a.id === id; })[0] || {};
+      var original = findAppointment(id) || {};
       var startVal = document.getElementById("egApptDrawerStart").value;
       var endVal = document.getElementById("egApptDrawerEnd").value;
       // datetime-local has no timezone of its own - new Date() on it is
@@ -1274,17 +1315,155 @@
       saveBtn.disabled = true; saveBtn.textContent = "Saving...";
       api("/api/v1/crm/appointments/" + id, { method: "PATCH", body: body })
         .then(function(updated){
-          state.allAppointments = (state.allAppointments || []).map(function(a){
-            if (a.id !== updated.id) return a;
-            var copy = {}; for (var k in a) copy[k] = a[k];
-            for (var k2 in updated) copy[k2] = updated[k2];
-            return copy;
-          });
+          // Patch the saved copy into whichever lists are loaded - but
+          // leave a list that was never fetched as null, not [], or the
+          // Appointments tab would claim "No appointments yet".
+          var mergeInto = function(list){
+            return list.map(function(a){
+              if (a.id !== updated.id) return a;
+              var copy = {}; for (var k in a) copy[k] = a[k];
+              for (var k2 in updated) copy[k2] = updated[k2];
+              return copy;
+            });
+          };
+          if (state.allAppointments) state.allAppointments = mergeInto(state.allAppointments);
+          if (state.leadAppointments) state.leadAppointments = mergeInto(state.leadAppointments);
           showToast("Appointment updated");
           state.appointmentDrawerId = null;
           render();
         })
         .catch(function(err){ showToast(err.message, true); saveBtn.disabled = false; saveBtn.textContent = "Save Changes"; });
+    });
+  }
+
+  // ---- Book a meeting ----
+  // POST /crm/leads/{lead_id}/appointments (AppointmentCreateRequest:
+  // start_at required; end_at, timezone, meeting_url, location, notes
+  // optional). Reachable from the Appointments tab (pick any lead) and from
+  // inside a lead's own drawer (that lead is fixed). Whether the backend
+  // also puts a booking made this way on the connected Google Calendar
+  // isn't something this form can know - it just creates the appointment.
+  var BOOKING_DURATIONS = [15, 30, 45, 60, 90, 120];
+  function browserTimeZone(){
+    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || null; } catch(e){ return null; }
+  }
+  function openBooking(leadId){
+    // Default the start to the next top of the hour so the field is never
+    // empty or already in the past.
+    var d = new Date();
+    d.setMinutes(0, 0, 0);
+    d.setHours(d.getHours() + 1);
+    state.bookingDraft = {
+      leadId: leadId || "",
+      lockLead: !!leadId,
+      start: isoToLocalInput(d.toISOString()),
+      duration: 30,
+      meetingUrl: "",
+      location: "",
+      notes: ""
+    };
+    render();
+  }
+  function bookingDrawerHtml(){
+    var b = state.bookingDraft;
+    if (!b) return "";
+    var leads = joinedLeads();
+    var leadField;
+    if (b.lockLead) {
+      var lead = leads.filter(function(l){ return l.id === b.leadId; })[0];
+      leadField = '<div class="eg-form-row"><label>Lead</label><div class="eg-input" style="background:#f7f9fc">' + esc(lead ? contactName(lead.contact) : "Lead") + '</div></div>';
+    } else {
+      var sorted = leads.slice().sort(function(x, y){
+        return contactName(x.contact).toLowerCase() < contactName(y.contact).toLowerCase() ? -1 : 1;
+      });
+      leadField = '<div class="eg-form-row"><label>Lead</label><select class="eg-select" id="egBookLead">' +
+        '<option value="">Select a lead...</option>' +
+        sorted.map(function(l){
+          return '<option value="' + esc(l.id) + '"' + (l.id === b.leadId ? " selected" : "") + '>' +
+            esc(contactName(l.contact) + " - " + (l.service_interest || l.title || "Lead")) + '</option>';
+        }).join("") + '</select></div>';
+    }
+    return '<div class="eg-drawer-backdrop open" id="egBookBackdrop"></div>' +
+      '<aside class="eg-drawer open">' +
+      '<button class="eg-drawer-close" id="egBookClose" aria-label="Close">&times;</button>' +
+      '<h2>Book a Meeting</h2>' +
+      '<div class="eg-drawer-sub">New appointment</div>' +
+      leadField +
+      '<div class="eg-form-row"><label>Start</label><input class="eg-input" type="datetime-local" id="egBookStart" value="' + esc(b.start) + '" />' +
+      '<div class="eg-small eg-muted" style="margin-top:4px">Time zone: ' + esc(browserTimeZone() || "your browser\'s") + '</div></div>' +
+      '<div class="eg-form-row"><label>Duration</label><select class="eg-select" id="egBookDuration">' +
+      BOOKING_DURATIONS.map(function(m){
+        return '<option value="' + m + '"' + (m === b.duration ? " selected" : "") + '>' + (m >= 60 && m % 60 === 0 ? (m / 60) + (m === 60 ? " hour" : " hours") : m + " minutes") + '</option>';
+      }).join("") + '</select></div>' +
+      '<div class="eg-form-row"><label>Meeting URL <span class="eg-small eg-muted">(optional)</span></label><input class="eg-input" id="egBookMeetingUrl" placeholder="https://..." value="' + esc(b.meetingUrl) + '" /></div>' +
+      '<div class="eg-form-row"><label>Location <span class="eg-small eg-muted">(optional)</span></label><input class="eg-input" id="egBookLocation" placeholder="Address or room" value="' + esc(b.location) + '" /></div>' +
+      '<div class="eg-form-row"><label>Notes <span class="eg-small eg-muted">(optional)</span></label><textarea class="eg-textarea" id="egBookNotes" style="min-height:70px">' + esc(b.notes) + '</textarea></div>' +
+      '<div class="eg-error" id="egBookError" hidden></div>' +
+      '<button class="eg-btn" id="egBookSave">Book Appointment</button>' +
+      '</aside>';
+  }
+  function bindBookingDrawer(){
+    var b = state.bookingDraft;
+    if (!b) return;
+    var close = function(){ state.bookingDraft = null; render(); };
+    var backdrop = document.getElementById("egBookBackdrop");
+    if (backdrop) backdrop.addEventListener("click", close);
+    var closeBtn = document.getElementById("egBookClose");
+    if (closeBtn) closeBtn.addEventListener("click", close);
+
+    // Keep the draft current without re-rendering on each keystroke.
+    function track(id, key, asNumber){
+      var el = document.getElementById(id);
+      if (!el) return;
+      var handler = function(){ b[key] = asNumber ? parseInt(el.value, 10) : el.value; };
+      el.addEventListener("input", handler);
+      el.addEventListener("change", handler);
+    }
+    track("egBookLead", "leadId");
+    track("egBookStart", "start");
+    track("egBookDuration", "duration", true);
+    track("egBookMeetingUrl", "meetingUrl");
+    track("egBookLocation", "location");
+    track("egBookNotes", "notes");
+
+    var errEl = document.getElementById("egBookError");
+    function showErr(msg){ errEl.textContent = msg; errEl.hidden = false; }
+    var saveBtn = document.getElementById("egBookSave");
+    if (saveBtn) saveBtn.addEventListener("click", function(){
+      errEl.hidden = true;
+      if (!b.leadId) { showErr("Choose which lead this meeting is with."); return; }
+      if (!b.start) { showErr("Pick a start date and time."); return; }
+      var start = new Date(b.start);
+      if (isNaN(start.getTime())) { showErr("That start time isn't valid."); return; }
+      if (start.getTime() <= Date.now()) { showErr("Pick a start time in the future."); return; }
+      var end = new Date(start.getTime() + b.duration * 60000);
+      // Optional fields are only sent when filled in.
+      var body = { start_at: start.toISOString(), end_at: end.toISOString() };
+      var tz = browserTimeZone();
+      if (tz) body.timezone = tz;
+      if (b.meetingUrl.trim()) body.meeting_url = b.meetingUrl.trim();
+      if (b.location.trim()) body.location = b.location.trim();
+      if (b.notes.trim()) body.notes = b.notes.trim();
+
+      var leadId = b.leadId;
+      saveBtn.disabled = true; saveBtn.textContent = "Booking...";
+      api("/api/v1/crm/leads/" + leadId + "/appointments", { method: "POST", body: body })
+        .then(function(){
+          state.bookingDraft = null;
+          // Refresh whatever is showing this lead's appointments, and the
+          // leads themselves (a booking can clear a lead's "needs manual
+          // scheduling" flag).
+          if (state.allAppointments) ensureAllAppointments();
+          if (state.leadDrawerId === leadId) {
+            api("/api/v1/crm/leads/" + leadId + "/appointments").then(function(d){ state.leadAppointments = d; render(); }).catch(function(){});
+          }
+          ensureLeads();
+          showToast("Appointment booked");
+        })
+        .catch(function(err){
+          saveBtn.disabled = false; saveBtn.textContent = "Book Appointment";
+          showErr(err.message);
+        });
     });
   }
 
@@ -1316,6 +1495,8 @@
     document.querySelectorAll("[data-appointment-drawer]").forEach(function(el){
       el.addEventListener("click", function(){ state.appointmentDrawerId = el.getAttribute("data-appointment-drawer"); render(); });
     });
+    var bookApptBtn = document.getElementById("egBookAppointmentBtn");
+    if (bookApptBtn) bookApptBtn.addEventListener("click", function(){ openBooking(null); });
 
     var leadSearch = document.getElementById("egLeadSearch");
     if (leadSearch) leadSearch.addEventListener("input", function(){
@@ -2230,6 +2411,7 @@
       '<div class="eg-form-row"><label>Notes</label><textarea class="eg-textarea" id="egDrawerNotes" style="min-height:80px">' + esc(r.notes || "") + '</textarea></div>' +
       '<button class="eg-btn" id="egDrawerSaveStatus">Save Changes</button>' +
       '<h4>Appointments</h4>' +
+      '<button class="eg-btn ghost" id="egLeadBookBtn" style="margin-bottom:10px">+ Book a Meeting</button>' +
       appointmentsHtml() +
       '</aside>';
   }
@@ -2285,7 +2467,8 @@
         '<b>' + when + '</b>' +
         (where ? '<div class="eg-small eg-muted" style="margin-top:2px">' + where + '</div>' : "") +
         (a.notes ? '<div class="eg-small" style="margin-top:6px">' + esc(a.notes) + '</div>' : "") +
-        '<div style="margin-top:8px"><select class="eg-select" style="padding:6px 8px;font-size:12px;width:auto" data-appt-status="' + esc(a.id) + '">' + opts + '</select></div>' +
+        '<div style="margin-top:8px;display:flex;gap:8px;align-items:center"><select class="eg-select" style="padding:6px 8px;font-size:12px;width:auto" data-appt-status="' + esc(a.id) + '">' + opts + '</select>' +
+        '<button class="eg-btn ghost" style="padding:5px 10px;font-size:12px" data-appt-edit="' + esc(a.id) + '">Edit / Reschedule</button></div>' +
         '</div>';
     }).join("");
   }
@@ -2322,6 +2505,11 @@
           render();
         })
         .catch(function(err){ showToast(err.message, true); saveBtn.disabled = false; saveBtn.textContent = "Save Changes"; });
+    });
+    var leadBookBtn = document.getElementById("egLeadBookBtn");
+    if (leadBookBtn) leadBookBtn.addEventListener("click", function(){ openBooking(state.leadDrawerId); });
+    document.querySelectorAll("[data-appt-edit]").forEach(function(btn){
+      btn.addEventListener("click", function(){ state.appointmentDrawerId = btn.getAttribute("data-appt-edit"); render(); });
     });
     document.querySelectorAll("[data-appt-status]").forEach(function(sel){
       sel.addEventListener("change", function(){
@@ -3052,19 +3240,99 @@
   // name customers see in texts and emails and how to reach the business.
   function accountHtml(){
     var t = state.tenantSelf;
-    if (!t) return '<div class="eg-card"><div class="eg-empty">Loading...</div></div>';
-    return '<div class="eg-card" id="egAccountCard">' +
-      '<h3>Business details</h3>' +
-      '<p class="eg-small eg-muted" style="margin-top:-8px">The business name appears in the texts and emails your customers receive.</p>' +
-      '<div class="eg-form-row"><label>Business name</label><input class="eg-input" id="egAcctName" value="' + esc(t.name || "") + '" /></div>' +
-      '<div class="eg-form-row"><label>Contact name</label><input class="eg-input" id="egAcctContactName" value="' + esc(t.contact_name || "") + '" /></div>' +
-      '<div class="eg-form-row"><label>Contact phone</label><input class="eg-input" id="egAcctContactPhone" placeholder="(555) 123-4567" value="' + esc(t.contact_phone || "") + '" /></div>' +
-      '<div class="eg-form-row"><label>Website</label><input class="eg-input" id="egAcctWebsite" placeholder="https://" value="' + esc(t.website || "") + '" /></div>' +
-      '<button class="eg-btn" id="egAcctSave">Save</button>' +
+    var businessCard = !t
+      ? '<div class="eg-card"><div class="eg-empty">Loading...</div></div>'
+      : '<div class="eg-card" id="egAccountCard">' +
+        '<h3>Business details</h3>' +
+        '<p class="eg-small eg-muted" style="margin-top:-8px">The business name appears in the texts and emails your customers receive.</p>' +
+        '<div class="eg-form-row"><label>Business name</label><input class="eg-input" id="egAcctName" value="' + esc(t.name || "") + '" /></div>' +
+        '<div class="eg-form-row"><label>Contact name</label><input class="eg-input" id="egAcctContactName" value="' + esc(t.contact_name || "") + '" /></div>' +
+        '<div class="eg-form-row"><label>Contact phone</label><input class="eg-input" id="egAcctContactPhone" placeholder="(555) 123-4567" value="' + esc(t.contact_phone || "") + '" /></div>' +
+        '<div class="eg-form-row"><label>Website</label><input class="eg-input" id="egAcctWebsite" placeholder="https://" value="' + esc(t.website || "") + '" /></div>' +
+        '<button class="eg-btn" id="egAcctSave">Save</button>' +
+        '</div>';
+    return businessCard + passwordCardHtml();
+  }
+
+  // The admin sets a client's first password when creating them; this is
+  // how the client replaces it with their own. POST /auth/change-password
+  // wants current_password, new_password (12+ characters, enforced by the
+  // backend) and confirm_password, and answers 204 on success. The login
+  // email is shown read-only: it's the username, and having it on the form
+  // also lets a browser's password manager offer to update the right entry.
+  function passwordCardHtml(){
+    var email = (state.user && state.user.email) || "";
+    return '<div class="eg-card" id="egPasswordCard" style="margin-top:16px">' +
+      '<h3>Change password</h3>' +
+      '<p class="eg-small eg-muted" style="margin-top:-8px">Your email is your username. Pick a password of at least 12 characters that you don\'t use anywhere else.</p>' +
+      '<form id="egPwForm" autocomplete="on">' +
+      '<div class="eg-form-row"><label>Login email (username)</label><input class="eg-input" type="email" id="egPwUsername" autocomplete="username" value="' + esc(email) + '" readonly style="background:#f7f9fc" /></div>' +
+      '<div class="eg-form-row"><label>Current password</label><input class="eg-input" type="password" id="egPwCurrent" autocomplete="current-password" /></div>' +
+      '<div class="eg-form-row"><label>New password <span class="eg-small eg-muted">(at least 12 characters)</span></label><input class="eg-input" type="password" id="egPwNew" autocomplete="new-password" /></div>' +
+      '<div class="eg-form-row"><label>Confirm new password</label><input class="eg-input" type="password" id="egPwConfirm" autocomplete="new-password" /></div>' +
+      '<label class="eg-small" style="display:flex;align-items:center;gap:6px;margin-bottom:12px"><input type="checkbox" id="egPwShow" />Show passwords</label>' +
+      '<div class="eg-error" id="egPwError" hidden></div>' +
+      '<button type="submit" class="eg-btn" id="egPwSave">Change Password</button>' +
+      '</form>' +
       '</div>';
   }
 
+  function bindPasswordCard(){
+    var form = document.getElementById("egPwForm");
+    if (!form) return;
+    var errEl = document.getElementById("egPwError");
+    // Errors go in an inline element instead of a toast: showToast()
+    // re-renders the whole page, which would wipe the three password
+    // fields the owner just typed and make them start over after a typo.
+    function showErr(msg){ errEl.textContent = msg; errEl.hidden = false; }
+
+    var showBox = document.getElementById("egPwShow");
+    if (showBox) showBox.addEventListener("change", function(){
+      ["egPwCurrent", "egPwNew", "egPwConfirm"].forEach(function(id){
+        document.getElementById(id).type = showBox.checked ? "text" : "password";
+      });
+    });
+
+    form.addEventListener("submit", function(e){
+      e.preventDefault();
+      errEl.hidden = true;
+      var current = document.getElementById("egPwCurrent").value;
+      var next = document.getElementById("egPwNew").value;
+      var confirm = document.getElementById("egPwConfirm").value;
+      if (!current) { showErr("Enter your current password."); return; }
+      if (next.length < 12) { showErr("The new password must be at least 12 characters."); return; }
+      if (next !== confirm) { showErr("The new password and its confirmation don't match."); return; }
+      if (next === current) { showErr("The new password must be different from the current one."); return; }
+
+      var btn = document.getElementById("egPwSave");
+      btn.disabled = true; btn.textContent = "Changing...";
+      api("/api/v1/auth/change-password", {
+        method: "POST",
+        keepSessionOn401: true,
+        body: { current_password: current, new_password: next, confirm_password: confirm }
+      })
+        .then(function(){
+          // showToast re-renders, which also clears the three fields.
+          showToast("Password changed");
+        })
+        .catch(function(err){
+          btn.disabled = false; btn.textContent = "Change Password";
+          if (err.status === 401) {
+            // Either a wrong current password or a genuinely expired login -
+            // /auth/me tells them apart (a dead token logs out there, as it
+            // should; a live one means it was the password).
+            api("/api/v1/auth/me")
+              .then(function(){ showErr("Your current password is incorrect."); })
+              .catch(function(){ /* api() already logged them out */ });
+            return;
+          }
+          showErr(err.message);
+        });
+    });
+  }
+
   function bindAccount(){
+    bindPasswordCard();
     var save = document.getElementById("egAcctSave");
     if (!save) return;
     save.addEventListener("click", function(){
