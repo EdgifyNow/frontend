@@ -1194,7 +1194,10 @@
       if (!opts.ignoreDateFilter && !withinDateFilter(r.created_at, state.leadDateFilter)) return false;
       return true;
     });
-    return rows.sort(function(a, b){ return new Date(b.created_at) - new Date(a.created_at); });
+    // Most recently active first: a lead is reused for every call or message
+    // from the same contact, so sorting by created_at kept a returning
+    // customer's newest request buried under older leads.
+    return rows.sort(function(a, b){ return new Date(b.last_activity_at || b.created_at) - new Date(a.last_activity_at || a.created_at); });
   }
 
   function filteredContacts(opts){
@@ -1205,7 +1208,7 @@
       if (q && text.indexOf(q) === -1) return false;
       if (!opts.ignoreDateFilter && !withinDateFilter(c.created_at, state.contactDateFilter)) return false;
       return true;
-    }).sort(function(a, b){ return new Date(b.created_at) - new Date(a.created_at); });
+    }).sort(function(a, b){ return new Date(b.last_interaction_at || b.created_at) - new Date(a.last_interaction_at || a.created_at); });
   }
 
   function leadsTabHtml(){
@@ -4076,7 +4079,9 @@
       channelDrawerHtml: channelDrawerHtml,
       noteNewArrivals: noteNewArrivals,
       voiceSettingsPanelHtml: voiceSettingsPanelHtml,
-      bindVoiceSettingsPanel: bindVoiceSettingsPanel
+      bindVoiceSettingsPanel: bindVoiceSettingsPanel,
+      filteredLeads: filteredLeads,
+      filteredContacts: filteredContacts
     };
     // A plain "state: state" property would snapshot the object that
     // existed at load time - doLogout() now reassigns the state variable
