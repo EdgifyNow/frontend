@@ -1966,7 +1966,7 @@
     }).join("");
 
     var sectionHtml = function(title, subtitle, count, bodyHtml){
-      return '<div class="eg-card" style="margin-bottom:14px">' +
+      return '<div class="eg-card eg-activity-section" style="margin-bottom:14px">' +
         '<div class="eg-cardhead"><h3 style="margin:0">' + esc(title) + ' <span class="eg-small eg-muted" style="font-weight:500">(' + count + ')</span></h3>' +
         '<span class="eg-small eg-muted" style="margin-left:auto">' + esc(subtitle) + '</span></div>' +
         bodyHtml + '</div>';
@@ -2055,18 +2055,18 @@
       return '<button class="eg-btn small ' + cls + '" data-channel-action="' + cfg.key + '" data-channel-action-id="' + esc(v.id) +
         '" data-channel-action-status="' + status + '"' + (confirmText ? ' data-channel-action-confirm="' + esc(confirmText) + '"' : '') + '>' + label + '</button>';
     };
-    var view = '<button class="eg-btn small ghost" data-channel-drawer="' + cfg.key + '" data-channel-drawer-id="' + esc(v.id) + '">View</button>';
+    // No "View" button: the whole card opens the details (see tileOpenAttrs).
     var phone = v.contact.phone || "the customer";
     var what = REQUEST_WORD[v.capture_type] || "request";
     if (v.needs_review) {
       return '<div class="eg-vtile-actions">' + act("in_progress", "Approve", "approve") +
         act("cancelled", "Reject", "reject", "Reject this " + what + "? Unless the card then shows 'Customer texted', please call " + phone + " to let them know.") +
-        view + '</div>';
+        '</div>';
     }
     if (v.status === "completed" || v.status === "cancelled") return "";
     var next = v.capture_type === "order" ? CHANNEL_NEXT_STATUS[v.status] : "completed";
     var nextLabel = v.capture_type === "order" ? CHANNEL_NEXT_LABEL[v.status] : "Done";
-    return '<div class="eg-vtile-actions">' + (next ? act(next, esc(nextLabel), "") : "") + view +
+    return '<div class="eg-vtile-actions">' + (next ? act(next, esc(nextLabel), "") : "") +
       act("cancelled", "Cancel", "ghost") + '</div>';
   }
 
@@ -2107,24 +2107,21 @@
     var details = v.details || {};
     var isReservation = v.capture_type === "reservation";
     var age = orderAge(v.created_at);
-    var hasName = !!v.contact.name;
     var statusText = v.review_decision === "rejected" ? "Rejected" : (v.needs_review ? "Awaiting approval" : (v.review_decision === "approved" && v.status === "in_progress" ? "Confirmed" : channelStatusLabel(v.status)));
     var badgeColor = v.review_decision === "rejected" ? "red" : (v.needs_review ? "amber" : (v.status === "in_progress" ? "green" : (CHANNEL_STATUS_BADGE[v.status] || "navy")));
     var typeColor = CHANNEL_TYPE_COLOR[v.capture_type] || "gray";
     var what = isReservation
       ? "Table for " + (details.party_size || "?")
       : (formatDetailValue(details.service || details.services || "") || "Booking");
-    return '<div class="eg-vtile ' + typeColor + (isNewArrival(v.id) ? ' is-new-arrival' : '') + '" data-channel-drawer="' + cfg.key + '" data-channel-drawer-id="' + esc(v.id) + '">' +
+    return '<div class="eg-vtile ' + typeColor + (v.needs_review ? ' needs-action' : '') + (isNewArrival(v.id) ? ' is-new-arrival' : '') + '"' + tileOpenAttrs(v, cfg) + '>' +
       '<div class="eg-vtile-top">' +
       '<div><div class="eg-order-ref">' + CHANNEL_TYPE_ICON[v.capture_type] + ' ' + (isReservation ? "RESERVATION" : "BOOKING REQUEST") + '</div>' +
       '<div class="eg-order-age' + (v.needs_review && age.minutes >= ORDER_LATE_MINUTES ? ' late' : '') + '">' + esc(age.text) + '</div></div>' +
       '<span class="eg-pill ' + badgeColor + '">' + esc(statusText) + '</span>' +
       '</div>' +
-      '<div class="eg-vtile-name">' + esc(hasName ? v.contact.name : (v.contact.phone || "Unknown caller")) +
-      (v.contact.is_test ? ' <span class="eg-tag" style="background:#f7d774">TEST</span>' : '') + '</div>' +
-      (hasName ? '<div class="eg-vtile-phone">' + esc(v.contact.phone || "-") + '</div>' : '') +
+      cardWhoHtml(v) +
       '<div class="eg-order-fulfil">' + esc(what) + ' &middot; ' + esc(requestedWhenText(details) || "time not given") + '</div>' +
-      textStatusHtml(v) +
+      textStatusHtml(v) + cardFootHtml(v, true) +
       requestActionsHtml(v, cfg) +
       '</div>';
   }
@@ -2134,32 +2131,168 @@
     var lines = orderLineItems(details);
     var age = orderAge(v.created_at);
     var late = v.needs_review && age.minutes >= ORDER_LATE_MINUTES;
-    var hasName = !!v.contact.name;
     var statusText = v.review_decision === "rejected" ? "Rejected" : (v.needs_review ? ORDER_STATUS_LABEL["new"] : channelStatusLabel(v.status));
     var badgeColor = v.review_decision === "rejected" ? "red" : (v.needs_review ? "amber" : (CHANNEL_STATUS_BADGE[v.status] || "navy"));
-    return '<div class="eg-vtile red' + (isNewArrival(v.id) ? ' is-new-arrival' : '') + '" data-channel-drawer="' + cfg.key + '" data-channel-drawer-id="' + esc(v.id) + '">' +
+    return '<div class="eg-vtile red' + (v.needs_review ? ' needs-action' : '') + (isNewArrival(v.id) ? ' is-new-arrival' : '') + '"' + tileOpenAttrs(v, cfg) + '>' +
       '<div class="eg-vtile-top">' +
       '<div><div class="eg-order-ref">' + CHANNEL_TYPE_ICON.order + ' ORDER #' + esc(String(v.id).slice(0, 6).toUpperCase()) + '</div>' +
       '<div class="eg-order-age' + (late ? ' late' : '') + '">' + esc(age.text) + '</div></div>' +
       '<span class="eg-pill ' + badgeColor + '">' + esc(statusText) + '</span>' +
       '</div>' +
-      '<div class="eg-vtile-name">' + esc(hasName ? v.contact.name : (v.contact.phone || "Unknown caller")) +
-      (v.contact.is_test ? ' <span class="eg-tag" style="background:#f7d774">TEST</span>' : '') + '</div>' +
-      (hasName ? '<div class="eg-vtile-phone">' + esc(v.contact.phone || "-") + '</div>' : '') +
+      cardWhoHtml(v) +
       orderFulfillmentHtml(details) +
       (lines.length
         ? '<ul class="eg-order-lines">' + lines.map(function(l){ return orderLineHtml(l, details.heard_as); }).join("") + '</ul>'
         : '<div class="eg-vtile-headline">' + esc(v.summary) + '</div>') +
-      orderFlagsHtml(v.flags) + textStatusHtml(v) +
+      orderFlagsHtml(v.flags) + textStatusHtml(v) + cardFootHtml(v, true) +
       requestActionsHtml(v, cfg) +
+      '</div>';
+  }
+
+  // ---- Shared card pieces: who, how it came in, and when ----
+  // "(732) 910-0839" from "+17329100839" or "17329100839"; anything that
+  // isn't a 10-digit US number is shown as it was stored.
+  function formatPhone(p){
+    var digits = String(p || "").replace(/\D/g, "");
+    if (digits.length === 11 && digits.charAt(0) === "1") digits = digits.slice(1);
+    if (digits.length !== 10) return p || "";
+    return "(" + digits.slice(0, 3) + ") " + digits.slice(3, 6) + "-" + digits.slice(6);
+  }
+  function channelWord(v){
+    return v.channel === "whatsapp" ? "WhatsApp" : (v.channel === "voice" ? "Phone call" : "Website");
+  }
+  // The card's attributes: the whole card opens the details, by click or by
+  // Enter/Space when focused with the keyboard - so no separate "View" button.
+  function tileOpenAttrs(v, cfg){
+    return ' data-channel-drawer="' + cfg.key + '" data-channel-drawer-id="' + esc(v.id) + '" tabindex="0" role="button"' +
+      ' aria-label="Open details"';
+  }
+  // Name and number: the name as the heading when there is one, otherwise
+  // the formatted number - never "Unknown" or raw digits.
+  function cardWhoHtml(v){
+    var phone = formatPhone(v.contact.phone);
+    var heading = v.contact.name || phone || "Unknown caller";
+    return '<div class="eg-vtile-name">' + esc(heading) +
+      (v.contact.is_test ? ' <span class="eg-tag" style="background:#f7d774">TEST</span>' : '') + '</div>' +
+      (v.contact.name && phone ? '<div class="eg-vtile-phone">' + esc(phone) + '</div>' : '');
+  }
+  function cardFootHtml(v, withoutAge){
+    return '<div class="eg-vtile-meta"><span>' + esc(channelWord(v)) + (withoutAge ? '' : ' &middot; ' + esc(orderAge(v.created_at).text)) + '</span></div>';
+  }
+  // "Mon, Oct 19 · 2:00 PM" from a stored appointment time. Its digits are
+  // the business's own wall clock tagged UTC, so they're read as UTC, never
+  // converted to the viewer's time zone.
+  function wallClockText(iso){
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return "";
+    var day = d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
+    var time = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "UTC" });
+    return day + " · " + time;
+  }
+
+  // ---- Appointment card: when, and one clear state - on the calendar,
+  // waiting for approval, or needing a call to schedule (and why).
+  var BOOKING_ISSUE_TEXT = {
+    missing_fields: "no day or time given",
+    unparseable: "time couldn't be read",
+    past_time: "time had passed",
+    slot_conflict: "time was taken",
+    outside_hours: "outside your hours",
+    no_timezone: "time zone not set",
+    booking_failed: "calendar couldn't be updated"
+  };
+  var BOOKING_STATE = {
+    booked: { text: "✓ On calendar", color: "green" },
+    awaiting_approval: { text: "Awaiting approval", color: "amber", action: true },
+    needs_scheduling: { text: "⚠ Needs scheduling", color: "red", action: true },
+    rejected: { text: "Rejected", color: "red" },
+    cancelled: { text: "Cancelled", color: "gray" },
+    no_show: { text: "No-show", color: "gray" },
+    completed: { text: "Completed", color: "gray" }
+  };
+
+  function appointmentState(v){
+    if (v.needs_review) return BOOKING_STATE.awaiting_approval;
+    if (v.booking_status && BOOKING_STATE[v.booking_status]) return BOOKING_STATE[v.booking_status];
+    return { text: channelStatusLabel(v.status), color: CHANNEL_STATUS_BADGE[v.status] || "navy" };
+  }
+
+  function appointmentWhenText(v){
+    if (v.appointment_start_at) return wallClockText(v.appointment_start_at);
+    var d = v.details || {};
+    if (d.requested_date && !d.requested_time) {
+      var day = /^\d{4}-\d{2}-\d{2}$/.test(d.requested_date) ? wallClockText(d.requested_date + "T00:00:00Z").split(" · ")[0] : d.requested_date;
+      return day + " · time not given";
+    }
+    if (d.requested_time && !d.requested_date) return "Day not given · " + requestedWhenText({ requested_date: "2000-01-01", requested_time: d.requested_time }).split(" · ")[1];
+    return requestedWhenText(d) || "Day and time not given";
+  }
+
+  function appointmentActionsHtml(v, cfg){
+    if (v.needs_review) return requestActionsHtml(v, cfg);
+    if (v.status === "completed" || v.status === "cancelled") return "";
+    var done = '<button class="eg-btn small ghost" data-channel-action="' + cfg.key + '" data-channel-action-id="' + esc(v.id) + '" data-channel-action-status="completed">Done</button>';
+    if (v.booking_status === "booked" && v.appointment_id) {
+      return '<div class="eg-vtile-actions">' +
+        '<button class="eg-btn small" data-appt-reschedule="' + esc(v.appointment_id) + '">Reschedule</button>' +
+        '<button class="eg-btn small ghost" data-appt-noshow="' + esc(v.appointment_id) + '" data-capture-id="' + esc(v.id) + '" data-capture-channel="' + cfg.key + '">No-show</button>' +
+        done + '</div>';
+    }
+    if (v.booking_status === "needs_scheduling" && v.contact.phone) {
+      return '<div class="eg-vtile-actions"><a class="eg-btn small" href="tel:' + esc(v.contact.phone) + '" data-stop-click>Call</a>' + done + '</div>';
+    }
+    return '<div class="eg-vtile-actions">' + done + '</div>';
+  }
+
+  function renderAppointmentTile(v, cfg){
+    var st = appointmentState(v);
+    var d = v.details || {};
+    var service = formatDetailValue(d.service || d.services || "");
+    var issue = v.booking_status === "needs_scheduling" && v.booking_issue ? (BOOKING_ISSUE_TEXT[v.booking_issue] || channelStatusLabel(v.booking_issue)) : "";
+    return '<div class="eg-vtile purple' + (st.action ? ' needs-action' : '') + (isNewArrival(v.id) ? ' is-new-arrival' : '') + '"' + tileOpenAttrs(v, cfg) + '>' +
+      '<div class="eg-vtile-top">' +
+      '<div class="eg-order-ref">' + CHANNEL_TYPE_ICON.appointment + ' APPOINTMENT</div>' +
+      '<span class="eg-pill ' + st.color + '">' + esc(st.text) + '</span>' +
+      '</div>' +
+      cardWhoHtml(v) +
+      '<div class="eg-order-fulfil">' + esc(appointmentWhenText(v)) + '</div>' +
+      (service ? '<div class="eg-small" style="margin-top:2px">' + esc(service) + '</div>' : '') +
+      (issue ? '<div class="eg-small" style="margin-top:4px;color:var(--red)">' + esc(issue.charAt(0).toUpperCase() + issue.slice(1)) + ' &mdash; call to arrange</div>' : '') +
+      textStatusHtml(v) +
+      cardFootHtml(v) +
+      appointmentActionsHtml(v, cfg) +
+      '</div>';
+  }
+
+  // ---- Question card: what was asked, what the assistant said, and
+  // whether it could answer at all - an unanswered one needs a person, and
+  // points at something missing from the knowledge base.
+  function renderQueryTile(v, cfg){
+    var d = v.details || {};
+    var unanswered = d.answered === false;
+    var question = d.question || v.summary;
+    var done = v.status === "completed" || v.status === "cancelled";
+    return '<div class="eg-vtile blue' + (unanswered && !done ? ' needs-action' : '') + (isNewArrival(v.id) ? ' is-new-arrival' : '') + '"' + tileOpenAttrs(v, cfg) + '>' +
+      '<div class="eg-vtile-top">' +
+      '<div class="eg-order-ref">' + CHANNEL_TYPE_ICON.general_inquiry + ' QUESTION</div>' +
+      (unanswered
+        ? '<span class="eg-pill red">⚠ Couldn&rsquo;t answer</span>'
+        : (d.answered === true ? '<span class="eg-pill blue">Answered</span>' : '')) +
+      '</div>' +
+      cardWhoHtml(v) +
+      '<div class="eg-vtile-headline">&ldquo;' + esc(question) + '&rdquo;</div>' +
+      (d.answer ? '<div class="eg-vtile-desc">' + esc(d.answer) + '</div>' : '') +
+      (unanswered ? '<div class="eg-small" style="margin-top:4px;color:var(--red)">Follow up, and add the answer to your knowledge base</div>' : '') +
+      cardFootHtml(v) +
+      (done ? '' : '<div class="eg-vtile-actions"><button class="eg-btn small ghost" data-channel-action="' + cfg.key + '" data-channel-action-id="' + esc(v.id) + '" data-channel-action-status="completed">Mark reviewed</button></div>') +
       '</div>';
   }
 
   function renderCaptureTile(v, cfg){
     if (v.capture_type === "order") return renderOrderTile(v, cfg);
-    if (v.capture_type === "reservation" || (v.capture_type === "appointment" && (v.needs_review || v.review_decision))) {
-      return renderRequestTile(v, cfg);
-    }
+    if (v.capture_type === "appointment") return renderAppointmentTile(v, cfg);
+    if (v.capture_type === "general_inquiry") return renderQueryTile(v, cfg);
+    if (v.capture_type === "reservation") return renderRequestTile(v, cfg);
     var typeColor = CHANNEL_TYPE_COLOR[v.capture_type] || "gray";
     var badgeColor = CHANNEL_STATUS_BADGE[v.status] || "navy";
     // A catering request is like an inquiry: nothing to run through stages,
@@ -2172,7 +2305,6 @@
     if (isInquiry) {
       if (!isDone) {
         actionsHtml = '<div class="eg-vtile-actions">' +
-          '<button class="eg-btn small ghost" data-channel-drawer="' + cfg.key + '" data-channel-drawer-id="' + esc(v.id) + '">View Details</button>' +
           '<button class="eg-btn small ghost" data-channel-action="' + cfg.key + '" data-channel-action-id="' + esc(v.id) + '" data-channel-action-status="completed">' + (v.capture_type === "catering" ? "Mark handled" : "Dismiss") + '</button>' +
           '</div>';
       }
@@ -2181,7 +2313,6 @@
         (nextStatus
           ? '<button class="eg-btn small" data-channel-action="' + cfg.key + '" data-channel-action-id="' + esc(v.id) + '" data-channel-action-status="' + nextStatus + '">' + esc(CHANNEL_NEXT_LABEL[v.status]) + '</button>'
           : '') +
-        '<button class="eg-btn small ghost" data-channel-drawer="' + cfg.key + '" data-channel-drawer-id="' + esc(v.id) + '">View</button>' +
         '<button class="eg-btn small ghost" data-channel-action="' + cfg.key + '" data-channel-action-id="' + esc(v.id) + '" data-channel-action-status="cancelled">Cancel</button>' +
         '</div>';
     }
@@ -2191,22 +2322,15 @@
       ? '<div class="eg-vtile-desc">' + esc(v.summary) + '</div>'
       : '<div class="eg-vtile-headline">' + esc(v.summary) + '</div>';
 
-    // No name on file: show the phone number itself as the heading
-    // instead of the word "Unknown", and skip the redundant phone line
-    // underneath since it's already the heading.
-    var hasName = !!v.contact.name;
-    var heading = hasName ? v.contact.name : (v.contact.phone || "Unknown");
-
-    return '<div class="eg-vtile ' + typeColor + (isNewArrival(v.id) ? ' is-new-arrival' : '') + '" data-channel-drawer="' + cfg.key + '" data-channel-drawer-id="' + esc(v.id) + '">' +
+    return '<div class="eg-vtile ' + typeColor + (isNewArrival(v.id) ? ' is-new-arrival' : '') + '"' + tileOpenAttrs(v, cfg) + '>' +
       '<div class="eg-vtile-top">' +
-      '<div><div class="eg-vtile-name">' + esc(heading) + (v.contact.is_test ? ' <span class="eg-tag" style="background:#f7d774">TEST</span>' : '') + '</div>' +
-      (hasName ? '<div class="eg-vtile-phone">' + esc(v.contact.phone || "-") + '</div>' : '') + '</div>' +
+      '<div class="eg-order-ref">' + CHANNEL_TYPE_ICON[v.capture_type] + ' ' + esc(channelTypeLabel(v.capture_type).toUpperCase()) + '</div>' +
       '<span class="eg-pill ' + badgeColor + '">' + channelStatusLabel(v.status) + '</span>' +
       '</div>' +
-      '<div class="eg-vtile-typebadge ' + typeColor + '">' + CHANNEL_TYPE_ICON[v.capture_type] + ' ' + esc(channelTypeLabel(v.capture_type)) + '</div>' +
+      cardWhoHtml(v) +
       headline +
       descHtml +
-      '<div class="eg-vtile-meta"><span>' + fmtDate(v.created_at) + '</span></div>' +
+      cardFootHtml(v) +
       actionsHtml +
       '</div>';
   }
@@ -2243,7 +2367,19 @@
         e.stopPropagation();
         openChannelDrawer(cfg, el.getAttribute("data-channel-drawer-id"));
       });
+      // A card is focusable (tabindex) and opens with Enter or Space too.
+      el.addEventListener("keydown", function(e){
+        if (e.target !== el || (e.key !== "Enter" && e.key !== " ")) return;
+        e.preventDefault();
+        openChannelDrawer(cfg, el.getAttribute("data-channel-drawer-id"));
+      });
     });
+    // After a card's action, refresh the board and, if this request's
+    // details are open, the details too.
+    var afterAction = function(captureId){
+      loadChannelCaptures(cfg);
+      if (state[cfg.drawerId] === captureId) openChannelDrawer(cfg, captureId);
+    };
     document.querySelectorAll('[data-channel-action="' + cfg.key + '"]').forEach(function(el){
       el.addEventListener("click", function(e){
         e.stopPropagation();
@@ -2253,10 +2389,78 @@
         if (confirmText && !window.confirm(confirmText)) return;
         el.disabled = true;
         api("/api/v1/crm/voice-captures/" + captureId, { method: "PATCH", body: { status: newStatus } })
-          .then(function(){ loadChannelCaptures(cfg); })
+          .then(function(){ afterAction(captureId); })
           .catch(function(err){ showToast(err.message, true); el.disabled = false; });
       });
     });
+    // A booked appointment: Reschedule opens the same appointment editor the
+    // Appointments tab uses (loading appointments first if needed); No-show
+    // marks the real appointment and closes the request.
+    document.querySelectorAll("[data-appt-reschedule]").forEach(function(el){
+      el.addEventListener("click", function(e){
+        e.stopPropagation();
+        state[cfg.drawerId] = null;
+        state[cfg.drawerDetail] = null;
+        state.appointmentDrawerId = el.getAttribute("data-appt-reschedule");
+        if (!state.allAppointments) ensureAllAppointments();
+        render();
+      });
+    });
+    document.querySelectorAll("[data-appt-noshow]").forEach(function(el){
+      el.addEventListener("click", function(e){
+        e.stopPropagation();
+        if (el.getAttribute("data-capture-channel") !== cfg.key) return;
+        var captureId = el.getAttribute("data-capture-id");
+        el.disabled = true;
+        api("/api/v1/crm/appointments/" + el.getAttribute("data-appt-noshow"), { method: "PATCH", body: { status: "no_show" } })
+          .then(function(){
+            return api("/api/v1/crm/voice-captures/" + captureId, { method: "PATCH", body: { status: "completed" } });
+          })
+          .then(function(){ afterAction(captureId); })
+          .catch(function(err){ showToast(err.message, true); el.disabled = false; });
+      });
+    });
+    // Links inside a card (Call) do their own thing without opening it.
+    document.querySelectorAll("[data-stop-click]").forEach(function(el){
+      el.addEventListener("click", function(e){ e.stopPropagation(); });
+    });
+  }
+
+  // The details list in plain words: "Date: Mon, Oct 19" rather than
+  // "requested_date: 2026-10-19". Things shown elsewhere in the panel (the
+  // question and answer, pickup/delivery and time) aren't repeated.
+  var DETAIL_LABELS = {
+    requested_date: "Date", requested_time: "Time", requested_when: "When", service: "Service", services: "Services",
+    party_size: "Party size", guest_count: "Guests", request: "Request", items: "Items", item: "Item",
+    quantity: "Quantity", notes: "Notes", heard_as: "Heard as", delivery_address: "Delivery address"
+  };
+  var DETAIL_HIDDEN = ["question", "answer", "answered", "fulfillment", "order_time"];
+
+  function drawerDetailsHtml(d){
+    var details = d.details || {};
+    var keys = Object.keys(details).filter(function(k){
+      return DETAIL_HIDDEN.indexOf(k) === -1 && formatDetailValue(details[k]) !== "";
+    });
+    if (!keys.length) return "";
+    return '<h4>Details</h4>' + keys.map(function(k){
+      var value = formatDetailValue(details[k]);
+      if (k === "requested_date" && /^\d{4}-\d{2}-\d{2}$/.test(value)) value = wallClockText(value + "T00:00:00Z").split(" · ")[0];
+      if (k === "requested_time" && /^\d{1,2}:\d{2}$/.test(value)) value = requestedWhenText({ requested_date: "2000-01-01", requested_time: value }).split(" · ")[1];
+      var label = DETAIL_LABELS[k] || channelStatusLabel(k);
+      return '<div class="eg-kv"><span>' + esc(label) + '</span><b>' + esc(value) + '</b></div>';
+    }).join("");
+  }
+
+  // The same actions as the request's card, in place of a raw status list.
+  function drawerActionsHtml(d, cfg){
+    var html;
+    if (d.capture_type === "order" || d.capture_type === "reservation") html = requestActionsHtml(d, cfg);
+    else if (d.capture_type === "appointment") html = appointmentActionsHtml(d, cfg);
+    else if (d.status !== "completed" && d.status !== "cancelled") {
+      html = '<div class="eg-vtile-actions"><button class="eg-btn small ghost" data-channel-action="' + cfg.key + '" data-channel-action-id="' + esc(d.id) +
+        '" data-channel-action-status="completed">' + (d.capture_type === "general_inquiry" ? "Mark reviewed" : "Mark handled") + '</button></div>';
+    }
+    return html ? '<h4>Actions</h4>' + html : "";
   }
 
   function channelDrawerHtml(cfg){
@@ -2267,10 +2471,6 @@
       return '<div class="eg-drawer-backdrop open" id="' + backdropId + '"></div>' +
         '<aside class="eg-drawer open"><div class="eg-small eg-muted">Loading...</div></aside>';
     }
-    var statusSelect = '<select class="eg-select" id="' + cfg.idPrefix + 'DrawerStatus">' + CHANNEL_STATUS_OPTIONS.map(function(s){
-      return '<option value="' + s + '"' + (s === d.status ? " selected" : "") + '>' + channelStatusLabel(s) + '</option>';
-    }).join("") + '</select>';
-
     var transcriptSection = "";
     if (cfg.showTranscript) {
       var transcriptHtml = !d.transcript.length
@@ -2285,11 +2485,23 @@
     return '<div class="eg-drawer-backdrop open" id="' + backdropId + '"></div>' +
       '<aside class="eg-drawer open">' +
       '<button class="eg-drawer-close" id="' + cfg.idPrefix + 'DrawerClose" aria-label="Close">&times;</button>' +
-      '<h2>' + esc(d.contact.name || "Unknown") + (d.contact.is_test ? ' <span class="eg-tag" style="background:#f7d774">TEST</span>' : '') + '</h2>' +
-      '<div class="eg-drawer-sub">' + esc(channelTypeLabel(d.capture_type)) + '</div>' +
+      '<h2>' + esc(d.contact.name || formatPhone(d.contact.phone) || "Unknown caller") + (d.contact.is_test ? ' <span class="eg-tag" style="background:#f7d774">TEST</span>' : '') + '</h2>' +
+      '<div class="eg-drawer-sub">' + esc(channelTypeLabel(d.capture_type)) + ' &middot; ' + esc(channelWord(d)) + '</div>' +
       (d.capture_type === "order" ? orderFulfillmentHtml(d.details || {}) + orderFlagsHtml(d.flags) : "") +
-      (d.capture_type === "reservation" || (d.capture_type === "appointment" && (d.needs_review || d.review_decision))
+      (d.capture_type === "reservation"
         ? '<div class="eg-order-fulfil">' + esc(requestedWhenText(d.details) || "Time not given") + '</div>'
+        : "") +
+      (d.capture_type === "appointment"
+        ? '<div class="eg-order-fulfil">' + esc(appointmentWhenText(d)) + '</div>' +
+          '<div style="margin-top:6px"><span class="eg-pill ' + appointmentState(d).color + '">' + esc(appointmentState(d).text) + '</span>' +
+          (d.booking_status === "needs_scheduling" && d.booking_issue
+            ? ' <span class="eg-small" style="color:var(--red)">' + esc(BOOKING_ISSUE_TEXT[d.booking_issue] || d.booking_issue) + '</span>'
+            : '') + '</div>'
+        : "") +
+      (d.capture_type === "general_inquiry" && d.details && d.details.question
+        ? '<h4>Asked</h4><div style="font-size:13px;line-height:1.5">&ldquo;' + esc(d.details.question) + '&rdquo;</div>' +
+          (d.details.answer ? '<h4>Assistant answered</h4><div style="font-size:13px;line-height:1.5">' + esc(d.details.answer) + '</div>' : '') +
+          (d.details.answered === false ? '<div class="eg-small" style="margin-top:6px;color:var(--red)">&#9888; The assistant couldn&rsquo;t answer this from your knowledge base.</div>' : '')
         : "") +
       (d.review_decision
         ? '<div class="eg-small eg-muted" style="margin-top:6px">' + (d.review_decision === "approved" ? "Approved" : "Rejected") +
@@ -2299,19 +2511,13 @@
           : "")) +
       textStatusHtml(d) +
       '<h4>' + esc(cfg.contactLabel) + '</h4>' +
-      '<div class="eg-kv"><span>Phone</span><b>' + esc(d.contact.phone || "-") + '</b></div>' +
+      '<div class="eg-kv"><span>Phone</span><b>' + esc(formatPhone(d.contact.phone) || "-") + '</b></div>' +
       '<div class="eg-kv"><span>Email</span><b>' + esc(d.contact.email || "-") + '</b></div>' +
       '<div class="eg-kv"><span>Received</span><b>' + fmtDate(d.created_at) + '</b></div>' +
       '<h4>Summary</h4>' +
       '<div style="line-height:1.55;font-size:13px">' + esc(d.summary) + '</div>' +
-      (d.details && Object.keys(d.details).length
-        ? '<h4>Details</h4>' + Object.keys(d.details).map(function(k){
-            return '<div class="eg-kv"><span>' + esc(k) + '</span><b>' + esc(formatDetailValue(d.details[k])) + '</b></div>';
-          }).join("")
-        : "") +
-      '<h4>Status</h4>' +
-      '<div class="eg-form-row">' + statusSelect + '</div>' +
-      '<button class="eg-btn" id="' + cfg.idPrefix + 'DrawerSaveStatus">Save status</button>' +
+      drawerDetailsHtml(d) +
+      drawerActionsHtml(d, cfg) +
       transcriptSection +
       '</aside>';
   }

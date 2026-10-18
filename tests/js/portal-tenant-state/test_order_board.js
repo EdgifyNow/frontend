@@ -200,20 +200,20 @@ test("a reservation waiting for staff has its own section, party size, time, and
   assert(html.includes(">Approve<") && html.includes(">Reject<"), "Approve and Reject");
 });
 
-test("a salon booking request waiting for staff gets Approve/Reject; once approved it reads Confirmed", () => {
+test("a salon booking request waiting for staff gets Approve/Reject; once approved it reads On calendar", () => {
   const { hooks } = buildPage();
   const cfg = hooks.CHANNEL_ACTIVITY.voice;
   hooks.state.voiceStatusFilter = "all";
   const booking = { capture_type: "appointment", summary: "a haircut", details: { service: "haircut", requested_date: "2026-10-20", requested_time: "15:00" }, flags: [] };
   hooks.state.voiceCaptures = [order(Object.assign({ id: "b1" }, booking))];
   let html = hooks.channelActivityHtml(cfg);
-  assert(html.includes("BOOKING REQUEST") && html.includes("haircut &middot; Tue, Oct 20 · 3:00 PM"), "the service and time");
+  assert(html.includes("APPOINTMENT") && html.includes("Awaiting approval") && html.includes("Tue, Oct 20 · 3:00 PM") && html.includes(">haircut<"), "the service and time");
   assert(html.includes(">Approve<"), "Approve while it waits");
 
-  hooks.state.voiceCaptures = [order(Object.assign({ id: "b1", status: "in_progress", review_decision: "approved", text_status: "sent" }, booking))];
+  hooks.state.voiceCaptures = [order(Object.assign({ id: "b1", status: "in_progress", review_decision: "approved", text_status: "sent", booking_status: "booked", appointment_id: "ap1", appointment_start_at: "2026-10-20T15:00:00Z" }, booking))];
   html = hooks.channelActivityHtml(cfg);
-  assert(html.includes(">Confirmed<"), "an approved booking reads Confirmed");
-  assert(html.includes('data-channel-action-status="completed">Done<') && !html.includes('data-channel-action-status="ready"'), "a booking is just marked Done, no Ready step");
+  assert(html.includes("✓ On calendar"), "an approved booking reads On calendar");
+  assert(html.includes('data-channel-action-status="completed">Done<') && html.includes("data-appt-reschedule=\"ap1\"") && !html.includes('data-channel-action-status="ready"'), "a booking offers Reschedule and Done, no Ready step");
   assert(html.includes("Customer texted"), "the tile says the customer was texted");
 });
 

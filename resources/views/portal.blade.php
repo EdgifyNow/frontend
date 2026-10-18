@@ -119,6 +119,21 @@ a{text-decoration:none;color:inherit}
 .eg-flags{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
 .eg-flag{font-size:11px;font-weight:650;border-radius:6px;padding:3px 7px;background:#fff7df;color:#8a5a12;border:1px solid #f3dfa6}
 .eg-flag.red{background:#feecec;color:var(--red);border-color:#f5c9c9}
+/* Activity board: a light grey section behind the cards so they stand out,
+   each card lightly tinted by type, and a stronger tint on cards that need
+   someone to act (awaiting approval, needs scheduling, couldn't answer). */
+.eg-activity-section{background:#f4f6fa}
+.eg-activity-section .eg-vtile{background:#fff}
+.eg-activity-section .eg-vtile.red{background:#fffaf8}
+.eg-activity-section .eg-vtile.purple{background:#fbf9ff}
+.eg-activity-section .eg-vtile.amber{background:#fffcf4}
+.eg-activity-section .eg-vtile.blue{background:#f7faff}
+.eg-activity-section .eg-vtile.green{background:#f6fcf8}
+.eg-activity-section .eg-vtile.needs-action.red{background:#fff0ec}
+.eg-activity-section .eg-vtile.needs-action.purple{background:#f3edfc}
+.eg-activity-section .eg-vtile.needs-action.amber{background:#fff6dc}
+.eg-activity-section .eg-vtile.needs-action.blue{background:#fdeeee}
+.eg-vtile:focus-visible{outline:3px solid var(--blue);outline-offset:2px}
 .eg-text-status{font-size:11.5px;margin-top:8px;font-weight:600}
 .eg-text-status.ok{color:var(--green)}
 .eg-text-status.bad{color:var(--red)}
