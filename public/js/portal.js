@@ -120,6 +120,13 @@
     // which alerts for nothing), and when each new arrival was first seen
     // (its tile stays highlighted for a minute).
     voiceKnownArrivalIds: null,
+    businessTypes: null,
+    btEditKey: null,
+    btDetail: null,
+    btDraft: null,
+    btError: null,
+    myQuestions: null,
+    tenantQuestions: null,
     whatsappKnownArrivalIds: null,
     newArrivals: {},
     unseenArrivals: 0,
@@ -605,7 +612,10 @@
     state.tenantDetailId = id;
     state.tenantDetail = null;
     state.tenantUsageSummary = null;
+    state.tenantQuestions = null;
     render();
+    if (!state.businessTypes) ensureBusinessTypes();
+    loadTenantQuestions(id);
     api("/api/v1/admin/tenants/" + id).then(function(d){
       state.tenantDetail = d;
       render();
@@ -643,7 +653,9 @@
     if (v === "leads") { ensureLeads(); ensureContacts(); }
     if (v === "knowledge") ensureDocuments();
     if (v === "assistant") ensureAssistants();
-    if (v === "tenants") ensureTenants();
+    if (v === "tenants") { ensureTenants(); if (!state.businessTypes) ensureBusinessTypes(); }
+    if (v === "businessTypes") ensureBusinessTypes();
+    if (v === "questions") ensureMyQuestions();
     if (v === "demo") { ensureAssistants(); ensureDocuments(); }
     if (v === "integrations") { ensureWidgetKey(); ensureGoogleCalendarStatus(); }
     if (v === "voice") { loadChannelCaptures(CHANNEL_ACTIVITY.voice); startChannelAutoRefresh(CHANNEL_ACTIVITY.voice); }
@@ -697,7 +709,8 @@
     if (isAdmin()) {
       return [
         { id: "dashboard", label: "Overview", icon: "home" },
-        { id: "tenants", label: "Clients", icon: "users" }
+        { id: "tenants", label: "Clients", icon: "users" },
+        { id: "businessTypes", label: "Business Types", icon: "spark" }
       ];
     }
     // Instant Demo lives in the client portal: it uploads a doc and asks the
@@ -711,6 +724,7 @@
       { id: "leads", label: "Leads & Contacts", icon: "contacts" },
       { id: "knowledge", label: "Knowledge", icon: "book" },
       { id: "assistant", label: "AI Assistant", icon: "spark" },
+      { id: "questions", label: "My Questions", icon: "spark" },
       { id: "integrations", label: "Integrations", icon: "plug" },
       { id: "account", label: "Account", icon: "home" }
     ];
@@ -733,7 +747,7 @@
   function renderShell(){
     var items = navItems();
     var navHtml = items.map(function(it){
-      var isActive = state.view === it.id || (it.id === "tenants" && state.view === "tenantDetail");
+      var isActive = state.view === it.id || (it.id === "tenants" && state.view === "tenantDetail") || (it.id === "businessTypes" && state.view === "businessTypeEdit");
       var cls = "eg-navitem" + (isActive ? " active" : "");
       return '<div class="' + cls + '" data-nav="' + it.id + '">' + egIcon(it.icon) + '<span>' + esc(it.label) + '</span></div>';
     }).join("");
@@ -794,6 +808,9 @@
     if (state.view === "demo") return "Instant Demo";
     if (state.view === "integrations") return "Integrations";
     if (state.view === "account") return "Account";
+    if (state.view === "businessTypes") return "Business Types";
+    if (state.view === "businessTypeEdit") return state.btDraft ? state.btDraft.label : "Business type";
+    if (state.view === "questions") return "My Questions";
     if (state.view === "voice") return "Voice Activity";
     if (state.view === "whatsapp") return "WhatsApp Activity";
     return "";
@@ -808,6 +825,9 @@
     if (state.view === "demo") return "Upload a document and get a live AI answer, right now.";
     if (state.view === "integrations") return "Generate a widget key to embed your assistant on your website.";
     if (state.view === "account") return "Your business name and contact details, as customers see them.";
+    if (state.view === "businessTypes") return "Questions and knowledge checklists for each kind of business.";
+    if (state.view === "businessTypeEdit") return "Changes go live from the next call. Every save is kept in the history.";
+    if (state.view === "questions") return "What your assistant asks your customers.";
     if (state.view === "voice") return "Live calls, orders, and appointments captured by your voice assistant.";
     if (state.view === "whatsapp") return "Live orders, appointments, and leads captured over WhatsApp.";
     return "";
@@ -825,6 +845,9 @@
     if (state.view === "demo") { el.innerHTML = demoHtml(); bindDemo(); return; }
     if (state.view === "integrations") { el.innerHTML = integrationsHtml(); bindIntegrations(); return; }
     if (state.view === "account") { el.innerHTML = accountHtml(); bindAccount(); return; }
+    if (state.view === "businessTypes") { el.innerHTML = businessTypesHtml(); bindBusinessTypes(); return; }
+    if (state.view === "businessTypeEdit") { el.innerHTML = businessTypeEditHtml(); bindBusinessTypeEdit(); return; }
+    if (state.view === "questions") { el.innerHTML = myQuestionsHtml(); bindMyQuestions(); return; }
     if (state.view === "voice") { el.innerHTML = voiceHtml(); bindVoice(); return; }
     if (state.view === "whatsapp") { el.innerHTML = whatsappHtml(); bindWhatsapp(); return; }
   }
@@ -3609,6 +3632,8 @@
       '<div class="eg-form-row"><label>Contact Phone (US)</label><input class="eg-input" id="egContactPhone" placeholder="(555) 123-4567" /></div>' +
       '<div class="eg-form-row"><label>Business Name <span class="eg-small eg-muted">(Optional)</span></label><input class="eg-input" id="egTenantName" /></div>' +
       '<div class="eg-form-row"><label>Website <span class="eg-small eg-muted">(Optional)</span></label><input class="eg-input" id="egWebsite" placeholder="https://example.com" /></div>' +
+      '<div class="eg-form-row"><label>Business type</label>' + businessTypeSelectHtml("egNewClientBusinessType", "other") +
+      '<div class="eg-small eg-muted" style="margin-top:4px">Decides what the assistant asks this client&rsquo;s customers. Pick Other if none fits.</div></div>' +
       '<div class="eg-form-row"><label>Business time zone</label>' + timezoneSelectHtml("egNewClientTimezone", "America/New_York") +
       '<div class="eg-small eg-muted" style="margin-top:4px">Appointments are booked in this time zone. The client can change it later on their Account page.</div></div>' +
       '<div class="eg-form-row"><label>Welcome Message <span class="eg-small eg-muted">(Optional)</span></label><input class="eg-input" id="egWelcomeMsg" /></div>' +
@@ -3675,7 +3700,8 @@
         tenant_name: bizName || null,
         website: website || null,
         welcome_message: welcome || null,
-        voice_timezone: document.getElementById("egNewClientTimezone").value || null
+        voice_timezone: document.getElementById("egNewClientTimezone").value || null,
+        business_type: document.getElementById("egNewClientBusinessType").value || null
       };
 
       btn.disabled = true; btn.textContent = "Creating...";
@@ -3719,6 +3745,8 @@
       '<h3>Account</h3>' +
       '<div class="eg-small eg-muted" style="margin-bottom:14px">' + esc(t.slug) + ' &middot; Created ' + fmtDate(t.created_at) + '</div>' +
       '<div class="eg-form-row"><label>Status</label><select class="eg-select" id="egDetailStatus">' + statusOptions + '</select></div>' +
+      '<div class="eg-form-row"><label>Business type</label>' + businessTypeSelectHtml("egDetailBusinessType", t.business_type || "other") +
+      '<div class="eg-small eg-muted" style="margin-top:4px">Decides what the assistant asks this client&rsquo;s customers. Changing it applies that type&rsquo;s default settings.</div></div>' +
       '<div class="eg-form-row"><label>Package</label><input class="eg-input" id="egDetailPackage" value="' + esc(t.package || "") + '" placeholder="e.g. Growth" /></div>' +
       '<div class="eg-form-row"><label>Negotiated Setup Price (USD)</label><input class="eg-input" type="number" step="0.01" min="0" id="egDetailSetupPrice" value="' + (t.setup_price_usd === null || t.setup_price_usd === undefined ? "" : t.setup_price_usd) + '" /></div>' +
       '<div class="eg-form-row"><label>Negotiated Recurring Price (USD/mo)</label><input class="eg-input" type="number" step="0.01" min="0" id="egDetailRecurringPrice" value="' + (t.recurring_price_usd === null || t.recurring_price_usd === undefined ? "" : t.recurring_price_usd) + '" /></div>' +
@@ -3746,7 +3774,10 @@
       '<div class="eg-small eg-muted">Contact email isn\'t available here yet - it\'s only captured when the client account is first created.</div>' +
       '</div>' +
       '</div>' +
-      channelSummaryHtml(t);
+      channelSummaryHtml(t) +
+      '<div class="eg-card" style="margin-top:16px"><h3>Questions for this client</h3>' +
+      '<div class="eg-small eg-muted" style="margin-bottom:10px">Changes the client asked for, on top of their business type. The client can make these themselves on their My Questions page too.</div>' +
+      questionsEditorHtml(state.tenantQuestions, "tq") + '</div>';
   }
 
   // High-level per-channel usage/leads summary, from GET
@@ -3807,9 +3838,26 @@
       '</div>';
   }
 
+  // The business type dropdown (Client details and the new-client form),
+  // from the admin's list of types.
+  function businessTypeSelectHtml(id, current){
+    var types = state.businessTypes || [{ key: current, label: current }];
+    return '<select class="eg-select" id="' + id + '" style="max-width:320px">' + types.map(function(t){
+      return '<option value="' + esc(t.key) + '"' + (t.key === current ? " selected" : "") + '>' + esc(t.label) + '</option>';
+    }).join("") + '</select>';
+  }
+
+  function loadTenantQuestions(id){
+    api("/api/v1/admin/tenants/" + id + "/questions").then(function(d){ state.tenantQuestions = d; render(); })
+      .catch(function(err){ showToast(err.message, true); });
+  }
+
   function bindTenantDetail(){
     var backBtn = document.getElementById("egBackToTenants");
     if (backBtn) backBtn.addEventListener("click", function(){ state.view = "tenants"; render(); });
+    if (state.tenantDetailId) {
+      bindQuestionsEditor("tenantQuestions", "tq", "/api/v1/admin/tenants/" + state.tenantDetailId + "/questions");
+    }
 
     var saveBtn = document.getElementById("egSaveTenantDetail");
     if (!saveBtn) return;
@@ -3819,6 +3867,7 @@
       var allowanceRaw = document.getElementById("egDetailAllowance").value.trim();
       var body = {
         status: document.getElementById("egDetailStatus").value,
+        business_type: document.getElementById("egDetailBusinessType").value,
         package: document.getElementById("egDetailPackage").value.trim() || null,
         internal_notes: document.getElementById("egDetailNotes").value.trim() || null,
         setup_price_usd: setupRaw === "" ? null : parseFloat(setupRaw),
@@ -3831,6 +3880,8 @@
           state.tenantDetail = updated;
           if (state.tenants) state.tenants = state.tenants.map(function(x){ return x.id === updated.id ? updated : x; });
           showToast("Client updated");
+          // A new business type means different questions.
+          loadTenantQuestions(updated.id);
           render();
         })
         .catch(function(err){ showToast(err.message, true); })
@@ -3863,6 +3914,387 @@
         .then(function(){ saveChannelsBtn.disabled = false; saveChannelsBtn.textContent = "Save Channel Settings"; });
     });
   }
+
+  // ---- Business types (platform admin) ----
+  // Templates the EdgifyNow team maintains: per kind of request, the
+  // questions the assistant asks (up to 10, required ones can't be removed),
+  // default settings, and the facts a knowledge base should cover. Every
+  // save is a new version, checked by the backend first; Revert brings an
+  // earlier one back. Live from the next call - no release needed.
+  function ensureBusinessTypes(){
+    api("/api/v1/admin/business-types").then(function(d){ state.businessTypes = d; render(); })
+      .catch(function(err){ showToast(err.message, true); });
+  }
+
+  function businessTypesHtml(){
+    var rows = state.businessTypes;
+    if (!rows) return '<div class="eg-card"><div class="eg-empty">Loading business types...</div></div>';
+    return '<div class="eg-card">' +
+      '<div class="eg-small eg-muted" style="margin-bottom:12px">What the assistant asks each kind of business&rsquo;s customers, and what its knowledge base should cover. Changes go live from the next call. Each client can add or reword questions for their own business on top of these.</div>' +
+      '<table class="eg-table"><thead><tr><th>Business type</th><th>Takes</th><th>Questions</th><th>Clients</th><th>Version</th><th>Last changed</th></tr></thead><tbody>' +
+      rows.map(function(r){
+        return '<tr data-bt-open="' + esc(r.key) + '" style="cursor:pointer">' +
+          '<td><b>' + esc(r.label) + '</b></td><td>' + esc(r.requests.join(", ")) + '</td><td>' + r.question_count + '</td>' +
+          '<td>' + r.client_count + '</td><td>v' + r.version + '</td><td class="eg-small eg-muted">' + fmtDate(r.updated_at) + '</td></tr>';
+      }).join("") +
+      '</tbody></table></div>';
+  }
+
+  function openBusinessType(key){
+    state.view = "businessTypeEdit";
+    state.btEditKey = key;
+    state.btDetail = null;
+    state.btDraft = null;
+    state.btError = null;
+    render();
+    api("/api/v1/admin/business-types/" + encodeURIComponent(key)).then(function(d){
+      state.btDetail = d;
+      state.btDraft = JSON.parse(JSON.stringify(d.definition));
+      render();
+    }).catch(function(err){ showToast(err.message, true); });
+  }
+
+  function bindBusinessTypes(){
+    document.querySelectorAll("[data-bt-open]").forEach(function(el){
+      el.addEventListener("click", function(){ openBusinessType(el.getAttribute("data-bt-open")); });
+    });
+  }
+
+  // A field name from what someone typed: "Preferred stylist" -> "preferred_stylist".
+  function fieldFromText(text, taken){
+    var base = String(text || "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 30) || "question";
+    if (!/^[a-z]/.test(base)) base = "q_" + base;
+    var field = base, n = 2;
+    while (taken.indexOf(field) !== -1) { field = base + "_" + n; n++; }
+    return field;
+  }
+
+  function businessTypeEditHtml(){
+    var d = state.btDetail, draft = state.btDraft;
+    if (!d || !draft) return '<div class="eg-card"><div class="eg-empty">Loading...</div></div>';
+    var max = d.max_questions_per_request;
+    var usedKinds = draft.requests.map(function(r){ return r.type; });
+    var requestsHtml = draft.requests.map(function(req, ri){
+      var locked = d.required_fields[req.type] || [];
+      var rows = req.questions.map(function(q, qi){
+        var isCore = locked.indexOf(q.field) !== -1;
+        return '<tr>' +
+          '<td style="width:150px"><input class="eg-input" data-bt-field="' + ri + ':' + qi + '" value="' + esc(q.field) + '"' + (isCore ? ' readonly style="background:#f7f9fc"' : '') + ' /></td>' +
+          '<td><input class="eg-input" data-bt-ask="' + ri + ':' + qi + '" value="' + esc(q.ask) + '" />' +
+          (q.only_if ? '<div class="eg-small eg-muted">Asked only when ' + esc(Object.keys(q.only_if).map(function(k){ return k + " is " + q.only_if[k]; }).join(", ")) + '</div>' : '') + '</td>' +
+          '<td style="white-space:nowrap"><label class="eg-small"><input type="checkbox" data-bt-req="' + ri + ':' + qi + '"' + (q.required ? ' checked' : '') + (isCore ? ' disabled' : '') + ' /> Required</label></td>' +
+          '<td style="white-space:nowrap">' +
+          '<button class="eg-btn ghost small" data-bt-move="' + ri + ':' + qi + ':-1"' + (qi === 0 ? ' disabled' : '') + ' aria-label="Move up">&uarr;</button> ' +
+          '<button class="eg-btn ghost small" data-bt-move="' + ri + ':' + qi + ':1"' + (qi === req.questions.length - 1 ? ' disabled' : '') + ' aria-label="Move down">&darr;</button> ' +
+          '<button class="eg-btn ghost small" data-bt-del="' + ri + ':' + qi + '"' + (isCore ? ' disabled title="Required for this kind of request"' : '') + '>Remove</button></td>' +
+          '</tr>';
+      }).join("");
+      return '<div class="eg-card" style="margin-top:12px">' +
+        '<div class="eg-row"><h3 style="margin:0">' + esc(d.request_types[req.type]) + '</h3>' +
+        '<span class="eg-small eg-muted" style="margin-left:auto">' + req.questions.length + ' / ' + max + ' questions</span>' +
+        (draft.requests.length > 1 ? ' <button class="eg-btn ghost small" data-bt-del-request="' + ri + '">Remove ' + esc(d.request_types[req.type].toLowerCase()) + 's</button>' : '') + '</div>' +
+        '<div class="eg-small eg-muted" style="margin:4px 0 8px">Always asked: ' + esc(locked.join(", ")) + '. The assistant only asks what the customer hasn&rsquo;t already said.</div>' +
+        '<table class="eg-table"><thead><tr><th>Field</th><th>Question</th><th></th><th></th></tr></thead><tbody>' + rows + '</tbody></table>' +
+        (req.questions.length < max ? '<button class="eg-btn ghost small" data-bt-add="' + ri + '" style="margin-top:8px">+ Add question</button>' : '') +
+        '</div>';
+    }).join("");
+    var addable = Object.keys(d.request_types).filter(function(k){ return usedKinds.indexOf(k) === -1; });
+    var factsHtml = draft.knowledge_checklist.map(function(f, fi){
+      return '<tr><td><input class="eg-input" data-bt-fact="' + fi + '" value="' + esc(f.fact) + '" /></td>' +
+        '<td style="width:160px"><select class="eg-select" data-bt-level="' + fi + '">' +
+        '<option value="required"' + (f.level === "required" ? " selected" : "") + '>Required</option>' +
+        '<option value="recommended"' + (f.level === "recommended" ? " selected" : "") + '>Recommended</option></select></td>' +
+        '<td style="width:90px"><button class="eg-btn ghost small" data-bt-del-fact="' + fi + '">Remove</button></td></tr>';
+    }).join("");
+    var versionsHtml = d.versions.map(function(v){
+      return '<tr><td>v' + v.version + (v.version === d.version ? ' <span class="eg-pill green">Live</span>' : '') + '</td>' +
+        '<td>' + esc(v.note || "") + '</td><td class="eg-small eg-muted">' + esc(v.created_by || "EdgifyNow") + '</td>' +
+        '<td class="eg-small eg-muted">' + fmtDate(v.created_at) + '</td>' +
+        '<td>' + (v.version === d.version ? '' : '<button class="eg-btn ghost small" data-bt-revert="' + v.version + '">Revert to this</button>') + '</td></tr>';
+    }).join("");
+    return '<button class="eg-btn ghost" id="egBtBack" style="margin-bottom:14px">&larr; Back to Business types</button>' +
+      '<div class="eg-card">' +
+      '<div class="eg-form-row"><label>Name shown to admins</label><input class="eg-input" id="egBtLabel" value="' + esc(draft.label) + '" style="max-width:320px" /></div>' +
+      '<div class="eg-form-row"><label>Bookings are</label><select class="eg-select" id="egBtBookingKind" style="max-width:320px">' +
+      '<option value="appointment"' + (draft.defaults.booking_kind !== "reservation" ? " selected" : "") + '>Appointments (checked against the calendar)</option>' +
+      '<option value="reservation"' + (draft.defaults.booking_kind === "reservation" ? " selected" : "") + '>Table reservations (party size and time)</option></select></div>' +
+      '<label class="eg-small" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="egBtApproval"' + (draft.defaults.bookings_need_approval ? " checked" : "") + ' /> Staff approve bookings before they&rsquo;re confirmed (default for new clients of this type)</label>' +
+      '</div>' +
+      requestsHtml +
+      (addable.length ? '<div style="margin-top:10px"><select class="eg-select" id="egBtAddKind" style="width:auto">' +
+        addable.map(function(k){ return '<option value="' + k + '">' + esc(d.request_types[k]) + '</option>'; }).join("") +
+        '</select> <button class="eg-btn ghost small" id="egBtAddRequest">+ Add request type</button></div>' : '') +
+      '<div class="eg-card" style="margin-top:12px"><h3>Knowledge checklist</h3>' +
+      '<div class="eg-small eg-muted" style="margin-bottom:8px">What a business of this type should have in its documents. Owners check theirs with Verify on the Knowledge page.</div>' +
+      '<table class="eg-table"><tbody>' + factsHtml + '</tbody></table>' +
+      '<button class="eg-btn ghost small" id="egBtAddFact" style="margin-top:8px">+ Add fact</button></div>' +
+      '<div class="eg-card" style="margin-top:12px">' +
+      (state.btError ? '<div class="eg-error" id="egBtError">' + esc(state.btError) + '</div>' : '') +
+      '<div class="eg-form-row"><label>What changed <span class="eg-small eg-muted">(optional, shown in the history)</span></label><input class="eg-input" id="egBtNote" /></div>' +
+      '<button class="eg-btn" id="egBtSave">Save as version ' + (d.version + 1) + '</button></div>' +
+      '<div class="eg-card" style="margin-top:12px"><h3>History</h3><table class="eg-table"><tbody>' + versionsHtml + '</tbody></table></div>';
+  }
+
+  // Reads every field on the editor back into the draft, so adding,
+  // removing or moving a row never loses what was typed.
+  function collectBtDraft(){
+    var draft = state.btDraft;
+    if (!draft) return;
+    var label = document.getElementById("egBtLabel");
+    if (label) draft.label = label.value;
+    var kind = document.getElementById("egBtBookingKind");
+    if (kind) draft.defaults.booking_kind = kind.value;
+    var approval = document.getElementById("egBtApproval");
+    if (approval) draft.defaults.bookings_need_approval = approval.checked;
+    document.querySelectorAll("[data-bt-field]").forEach(function(el){
+      var p = el.getAttribute("data-bt-field").split(":");
+      draft.requests[+p[0]].questions[+p[1]].field = el.value.trim();
+    });
+    document.querySelectorAll("[data-bt-ask]").forEach(function(el){
+      var p = el.getAttribute("data-bt-ask").split(":");
+      draft.requests[+p[0]].questions[+p[1]].ask = el.value;
+    });
+    document.querySelectorAll("[data-bt-req]").forEach(function(el){
+      var p = el.getAttribute("data-bt-req").split(":");
+      draft.requests[+p[0]].questions[+p[1]].required = el.checked;
+    });
+    document.querySelectorAll("[data-bt-fact]").forEach(function(el){
+      draft.knowledge_checklist[+el.getAttribute("data-bt-fact")].fact = el.value;
+    });
+    document.querySelectorAll("[data-bt-level]").forEach(function(el){
+      draft.knowledge_checklist[+el.getAttribute("data-bt-level")].level = el.value;
+    });
+  }
+
+  function bindBusinessTypeEdit(){
+    var back = document.getElementById("egBtBack");
+    if (back) back.addEventListener("click", function(){ state.view = "businessTypes"; ensureBusinessTypes(); render(); });
+    var draft = state.btDraft;
+    if (!draft) return;
+    var change = function(fn){ return function(e){ e.preventDefault(); collectBtDraft(); fn(e.currentTarget); state.btError = null; render(); }; };
+    document.querySelectorAll("[data-bt-add]").forEach(function(el){
+      el.addEventListener("click", change(function(t){
+        var req = draft.requests[+t.getAttribute("data-bt-add")];
+        req.questions.push({ field: fieldFromText("new question", req.questions.map(function(q){ return q.field; })), ask: "", required: false });
+      }));
+    });
+    document.querySelectorAll("[data-bt-del]").forEach(function(el){
+      el.addEventListener("click", change(function(t){
+        var p = t.getAttribute("data-bt-del").split(":");
+        draft.requests[+p[0]].questions.splice(+p[1], 1);
+      }));
+    });
+    document.querySelectorAll("[data-bt-move]").forEach(function(el){
+      el.addEventListener("click", change(function(t){
+        var p = t.getAttribute("data-bt-move").split(":");
+        var list = draft.requests[+p[0]].questions, i = +p[1], j = i + (+p[2]);
+        var tmp = list[i]; list[i] = list[j]; list[j] = tmp;
+      }));
+    });
+    document.querySelectorAll("[data-bt-del-request]").forEach(function(el){
+      el.addEventListener("click", change(function(t){ draft.requests.splice(+t.getAttribute("data-bt-del-request"), 1); }));
+    });
+    var addRequest = document.getElementById("egBtAddRequest");
+    if (addRequest) addRequest.addEventListener("click", change(function(){
+      var kind = document.getElementById("egBtAddKind").value;
+      var questions = (state.btDetail.required_fields[kind] || []).map(function(f){
+        return { field: f, ask: "", required: true };
+      });
+      draft.requests.push({ type: kind, questions: questions });
+    }));
+    document.querySelectorAll("[data-bt-del-fact]").forEach(function(el){
+      el.addEventListener("click", change(function(t){ draft.knowledge_checklist.splice(+t.getAttribute("data-bt-del-fact"), 1); }));
+    });
+    var addFact = document.getElementById("egBtAddFact");
+    if (addFact) addFact.addEventListener("click", change(function(){ draft.knowledge_checklist.push({ fact: "", level: "recommended" }); }));
+
+    var save = document.getElementById("egBtSave");
+    if (save) save.addEventListener("click", function(){
+      collectBtDraft();
+      save.disabled = true; save.textContent = "Saving...";
+      api("/api/v1/admin/business-types/" + encodeURIComponent(state.btEditKey), {
+        method: "PUT", body: { definition: draft, note: document.getElementById("egBtNote").value }
+      }).then(function(d){
+        state.btDetail = d;
+        state.btDraft = JSON.parse(JSON.stringify(d.definition));
+        state.btError = null;
+        showToast("Saved as version " + d.version + " - live from the next call");
+      }).catch(function(err){
+        // Kept inline (not a toast) and the draft kept, so nothing typed is lost.
+        state.btError = err.message;
+        render();
+      });
+    });
+    document.querySelectorAll("[data-bt-revert]").forEach(function(el){
+      el.addEventListener("click", function(){
+        var version = +el.getAttribute("data-bt-revert");
+        if (!window.confirm("Bring back version " + version + "? It's saved as a new version, so nothing is lost.")) return;
+        api("/api/v1/admin/business-types/" + encodeURIComponent(state.btEditKey) + "/revert", { method: "POST", body: { version: version } })
+          .then(function(d){
+            state.btDetail = d;
+            state.btDraft = JSON.parse(JSON.stringify(d.definition));
+            showToast("Reverted - live from the next call");
+          })
+          .catch(function(err){ showToast(err.message, true); });
+      });
+    });
+  }
+
+  // ---- A client's own questions: the owner's "My questions" page, and the
+  // same editor in the admin's Client details. Reword any question, turn off
+  // optional ones, add their own (up to the limit), add facts their
+  // knowledge base should cover. Required questions can be reworded, never
+  // switched off.
+  function questionsEditorHtml(profile, prefix){
+    if (!profile) return '<div class="eg-empty">Loading questions...</div>';
+    var max = profile.max_questions_per_request;
+    var requests = profile.requests.map(function(req, ri){
+      var asked = req.questions.filter(function(q){ return q.enabled; }).length;
+      var rows = req.questions.map(function(q, qi){
+        var mine = q.source === "client";
+        return '<div class="eg-form-row" style="display:flex;gap:10px;align-items:center;margin-bottom:8px">' +
+          '<input class="eg-input" data-' + prefix + '-ask="' + ri + ':' + qi + '" value="' + esc(q.ask) + '" style="flex:1"' + (q.enabled ? '' : ' disabled') + ' />' +
+          (q.required
+            ? '<span class="eg-pill navy" title="Always asked">Required</span>'
+            : (mine
+              ? '<span class="eg-pill purple">Your own</span><button class="eg-btn ghost small" data-' + prefix + '-remove="' + ri + ':' + qi + '">Remove</button>'
+              : '<label class="eg-small" style="white-space:nowrap"><input type="checkbox" data-' + prefix + '-on="' + ri + ':' + qi + '"' + (q.enabled ? ' checked' : '') + ' /> Ask this</label>')) +
+          (q.reworded ? '<button class="eg-btn ghost small" data-' + prefix + '-reset="' + ri + ':' + qi + '" title="' + esc(q.template_ask) + '">Use standard wording</button>' : '') +
+          '</div>';
+      }).join("");
+      return '<div style="margin-bottom:16px"><div class="eg-row"><h4 style="margin:0">' + esc(req.label) + '</h4>' +
+        '<span class="eg-small eg-muted" style="margin-left:auto">' + asked + ' / ' + max + ' asked</span></div>' +
+        '<div class="eg-small eg-muted" style="margin:4px 0 8px">The assistant only asks what the customer hasn&rsquo;t already said.</div>' +
+        rows +
+        (req.questions.filter(function(q){ return q.enabled; }).length < max
+          ? '<div style="display:flex;gap:10px"><input class="eg-input" data-' + prefix + '-new="' + ri + '" placeholder="Add your own question, e.g. Any allergies to hair products?" style="flex:1" />' +
+            '<button class="eg-btn ghost small" data-' + prefix + '-add="' + ri + '">+ Add</button></div>'
+          : '') +
+        '</div>';
+    }).join("");
+    var facts = profile.knowledge_checklist.map(function(f, fi){
+      return '<li style="margin-bottom:4px">' + esc(f.fact) + ' <span class="eg-small eg-muted">(' + esc(f.level) + ')</span>' +
+        (f.source === "client" ? ' <button class="eg-btn ghost small" data-' + prefix + '-remove-fact="' + fi + '">Remove</button>' : '') + '</li>';
+    }).join("");
+    return '<div class="eg-small eg-muted" style="margin-bottom:12px">Business type: <b>' + esc(profile.label) + '</b></div>' +
+      requests +
+      '<h4>What your knowledge base should cover</h4><ul style="margin:6px 0 10px;padding-left:18px">' + facts + '</ul>' +
+      '<div style="display:flex;gap:10px"><input class="eg-input" id="eg' + prefix + 'NewFact" placeholder="Add something specific to your business, e.g. Bridal packages" style="flex:1" />' +
+      '<button class="eg-btn ghost small" id="eg' + prefix + 'AddFact">+ Add</button></div>' +
+      '<button class="eg-btn" id="eg' + prefix + 'Save" style="margin-top:14px">Save questions</button>';
+  }
+
+  // Turns the editor back into the client's changes on top of the template.
+  function collectQuestionsCustom(profile, prefix){
+    var custom = { requests: {}, knowledge: [] };
+    profile.requests.forEach(function(req, ri){
+      var change = { wording: {}, off: [], added: [] };
+      req.questions.forEach(function(q, qi){
+        var input = document.querySelector('[data-' + prefix + '-ask="' + ri + ':' + qi + '"]');
+        var ask = input ? input.value.trim() : q.ask;
+        if (q.source === "client") {
+          change.added.push({ field: q.field, ask: ask, required: false });
+          return;
+        }
+
+        if (ask && ask !== q.template_ask) change.wording[q.field] = ask;
+        var on = document.querySelector('[data-' + prefix + '-on="' + ri + ':' + qi + '"]');
+        if (on && !on.checked) change.off.push(q.field);
+        else if (!on && !q.enabled) change.off.push(q.field);
+      });
+      custom.requests[req.type] = change;
+    });
+    profile.knowledge_checklist.forEach(function(f){
+      if (f.source === "client") custom.knowledge.push({ fact: f.fact, level: f.level });
+    });
+    return custom;
+  }
+
+  function bindQuestionsEditor(stateKey, prefix, url){
+    var profile = state[stateKey];
+    if (!profile) return;
+    var keepTyped = function(){
+      // Copy what's typed into the profile before re-rendering.
+      profile.requests.forEach(function(req, ri){
+        req.questions.forEach(function(q, qi){
+          var input = document.querySelector('[data-' + prefix + '-ask="' + ri + ':' + qi + '"]');
+          if (input && !input.disabled) q.ask = input.value;
+          var on = document.querySelector('[data-' + prefix + '-on="' + ri + ':' + qi + '"]');
+          if (on) q.enabled = on.checked;
+        });
+      });
+    };
+    document.querySelectorAll('[data-' + prefix + '-on]').forEach(function(el){
+      el.addEventListener("change", function(){ keepTyped(); render(); });
+    });
+    document.querySelectorAll('[data-' + prefix + '-reset]').forEach(function(el){
+      el.addEventListener("click", function(){
+        keepTyped();
+        var p = el.getAttribute('data-' + prefix + '-reset').split(":");
+        var q = profile.requests[+p[0]].questions[+p[1]];
+        q.ask = q.template_ask; q.reworded = false;
+        render();
+      });
+    });
+    document.querySelectorAll('[data-' + prefix + '-remove]').forEach(function(el){
+      el.addEventListener("click", function(){
+        keepTyped();
+        var p = el.getAttribute('data-' + prefix + '-remove').split(":");
+        profile.requests[+p[0]].questions.splice(+p[1], 1);
+        render();
+      });
+    });
+    document.querySelectorAll('[data-' + prefix + '-add]').forEach(function(el){
+      el.addEventListener("click", function(){
+        keepTyped();
+        var ri = +el.getAttribute('data-' + prefix + '-add');
+        var input = document.querySelector('[data-' + prefix + '-new="' + ri + '"]');
+        var ask = input ? input.value.trim() : "";
+        if (ask.length < 3) { showToast("Type the question first", true); return; }
+        var req = profile.requests[ri];
+        req.questions.push({
+          field: fieldFromText(ask, req.questions.map(function(q){ return q.field; })),
+          ask: ask, required: false, enabled: true, source: "client", template_ask: null, reworded: false
+        });
+        render();
+      });
+    });
+    document.querySelectorAll('[data-' + prefix + '-remove-fact]').forEach(function(el){
+      el.addEventListener("click", function(){
+        keepTyped();
+        profile.knowledge_checklist.splice(+el.getAttribute('data-' + prefix + '-remove-fact'), 1);
+        render();
+      });
+    });
+    var addFact = document.getElementById("eg" + prefix + "AddFact");
+    if (addFact) addFact.addEventListener("click", function(){
+      keepTyped();
+      var input = document.getElementById("eg" + prefix + "NewFact");
+      var fact = input ? input.value.trim() : "";
+      if (fact.length < 3) { showToast("Type the fact first", true); return; }
+      profile.knowledge_checklist.push({ fact: fact, level: "recommended", source: "client" });
+      render();
+    });
+    var save = document.getElementById("eg" + prefix + "Save");
+    if (save) save.addEventListener("click", function(){
+      var custom = collectQuestionsCustom(profile, prefix);
+      save.disabled = true; save.textContent = "Saving...";
+      api(url, { method: "PUT", body: { custom: custom } })
+        .then(function(d){ state[stateKey] = d; showToast("Questions saved - live from the next call"); })
+        .catch(function(err){ showToast(err.message, true); save.disabled = false; save.textContent = "Save questions"; });
+    });
+  }
+
+  function ensureMyQuestions(){
+    api("/api/v1/tenants/me/questions").then(function(d){ state.myQuestions = d; render(); })
+      .catch(function(err){ showToast(err.message, true); });
+  }
+  function myQuestionsHtml(){
+    return '<div class="eg-card">' +
+      '<div class="eg-small eg-muted" style="margin-bottom:12px">What your assistant asks customers when they order, book or request something. Reword any question to sound like you, add your own, or turn off optional ones.</div>' +
+      questionsEditorHtml(state.myQuestions, "mq") + '</div>';
+  }
+  function bindMyQuestions(){ bindQuestionsEditor("myQuestions", "mq", "/api/v1/tenants/me/questions"); }
 
   // ---- Instant Demo ----
   function demoHtml(){
@@ -4328,7 +4760,13 @@
       accountHtml: accountHtml,
       bindAccount: bindAccount,
       tenantsHtml: tenantsHtml,
-      bindTenants: bindTenants
+      bindTenants: bindTenants,
+      businessTypesHtml: businessTypesHtml,
+      businessTypeEditHtml: businessTypeEditHtml,
+      bindBusinessTypeEdit: bindBusinessTypeEdit,
+      myQuestionsHtml: myQuestionsHtml,
+      bindMyQuestions: bindMyQuestions,
+      tenantDetailHtml: tenantDetailHtml
     };
     // A plain "state: state" property would snapshot the object that
     // existed at load time - doLogout() now reassigns the state variable
