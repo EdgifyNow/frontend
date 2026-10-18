@@ -3329,6 +3329,36 @@
     }
   }
 
+  // ---- Business time zone: one dropdown for the new-client form and the
+  // Account page. Appointment times are the business's own wall clock, and
+  // this is what tells the calendar which clock that is - without it the
+  // backend won't book anything on the calendar automatically. Values are
+  // IANA names; a saved one not in this list (set some other way) is kept
+  // as its own option rather than silently replaced.
+  var TIMEZONE_OPTIONS = [
+    ["America/New_York", "Eastern (New York)"],
+    ["America/Chicago", "Central (Chicago)"],
+    ["America/Denver", "Mountain (Denver)"],
+    ["America/Phoenix", "Arizona (Phoenix, no daylight saving)"],
+    ["America/Los_Angeles", "Pacific (Los Angeles)"],
+    ["America/Anchorage", "Alaska (Anchorage)"],
+    ["Pacific/Honolulu", "Hawaii (Honolulu)"],
+    ["America/Toronto", "Canada Eastern (Toronto)"],
+    ["Europe/London", "UK (London)"],
+    ["Asia/Kolkata", "India (Kolkata)"],
+    ["Australia/Sydney", "Australia Eastern (Sydney)"]
+  ];
+
+  function timezoneSelectHtml(id, current, blankLabel){
+    var options = TIMEZONE_OPTIONS.slice();
+    if (current && !options.some(function(o){ return o[0] === current; })) options.unshift([current, current]);
+    return '<select class="eg-select" id="' + id + '" style="max-width:320px">' +
+      (blankLabel ? '<option value=""' + (!current ? " selected" : "") + '>' + esc(blankLabel) + '</option>' : '') +
+      options.map(function(o){
+        return '<option value="' + esc(o[0]) + '"' + (o[0] === current ? " selected" : "") + '>' + esc(o[1]) + '</option>';
+      }).join("") + '</select>';
+  }
+
   // ---- Tenants (admin) ----
   // Client / business name, slug and owner email/password map to the
   // real POST /api/v1/admin/tenants fields (confirmed against the current
@@ -3373,6 +3403,8 @@
       '<div class="eg-form-row"><label>Contact Phone (US)</label><input class="eg-input" id="egContactPhone" placeholder="(555) 123-4567" /></div>' +
       '<div class="eg-form-row"><label>Business Name <span class="eg-small eg-muted">(Optional)</span></label><input class="eg-input" id="egTenantName" /></div>' +
       '<div class="eg-form-row"><label>Website <span class="eg-small eg-muted">(Optional)</span></label><input class="eg-input" id="egWebsite" placeholder="https://example.com" /></div>' +
+      '<div class="eg-form-row"><label>Business time zone</label>' + timezoneSelectHtml("egNewClientTimezone", "America/New_York") +
+      '<div class="eg-small eg-muted" style="margin-top:4px">Appointments are booked in this time zone. The client can change it later on their Account page.</div></div>' +
       '<div class="eg-form-row"><label>Welcome Message <span class="eg-small eg-muted">(Optional)</span></label><input class="eg-input" id="egWelcomeMsg" /></div>' +
       '<div class="eg-form-row"><label>Slug <span class="eg-small eg-muted">(Auto-Generated; Edit if Needed)</span></label><input class="eg-input" id="egTenantSlug" placeholder="e.g., bright-path-tutoring" /></div>' +
       '<div class="eg-form-row"><label>Login Password <span class="eg-small eg-muted">(Auto-Generated &mdash; Copy to Share with Client)</span></label>' +
@@ -3436,7 +3468,8 @@
         tenant_slug: slug,
         tenant_name: bizName || null,
         website: website || null,
-        welcome_message: welcome || null
+        welcome_message: welcome || null,
+        voice_timezone: document.getElementById("egNewClientTimezone").value || null
       };
 
       btn.disabled = true; btn.textContent = "Creating...";
@@ -3825,6 +3858,9 @@
         '<div class="eg-form-row"><label>Contact name</label><input class="eg-input" id="egAcctContactName" value="' + esc(t.contact_name || "") + '" /></div>' +
         '<div class="eg-form-row"><label>Contact phone</label><input class="eg-input" id="egAcctContactPhone" placeholder="(555) 123-4567" value="' + esc(t.contact_phone || "") + '" /></div>' +
         '<div class="eg-form-row"><label>Website</label><input class="eg-input" id="egAcctWebsite" placeholder="https://" value="' + esc(t.website || "") + '" /></div>' +
+        '<div class="eg-form-row"><label>Business time zone</label>' + timezoneSelectHtml("egAcctTimezone", t.voice_timezone || "", "Not set - choose your time zone") +
+        (t.voice_timezone ? '' : '<div class="eg-small" style="margin-top:4px;color:var(--red)">Not set yet: until it is, bookings made by your assistant are sent to you to schedule instead of going on your calendar.</div>') +
+        '<div class="eg-small eg-muted" style="margin-top:4px">Appointment times are in this time zone, on your calendar and in texts and emails.</div></div>' +
         '<button class="eg-btn" id="egAcctSave">Save</button>' +
         '</div>';
     return businessCard + passwordCardHtml();
@@ -3916,7 +3952,8 @@
         name: document.getElementById("egAcctName").value,
         contact_name: document.getElementById("egAcctContactName").value,
         contact_phone: document.getElementById("egAcctContactPhone").value,
-        website: document.getElementById("egAcctWebsite").value
+        website: document.getElementById("egAcctWebsite").value,
+        voice_timezone: document.getElementById("egAcctTimezone").value || null
       };
       save.disabled = true; save.textContent = "Saving...";
       api("/api/v1/tenants/me", { method: "PATCH", body: body })
@@ -4081,7 +4118,11 @@
       voiceSettingsPanelHtml: voiceSettingsPanelHtml,
       bindVoiceSettingsPanel: bindVoiceSettingsPanel,
       filteredLeads: filteredLeads,
-      filteredContacts: filteredContacts
+      filteredContacts: filteredContacts,
+      accountHtml: accountHtml,
+      bindAccount: bindAccount,
+      tenantsHtml: tenantsHtml,
+      bindTenants: bindTenants
     };
     // A plain "state: state" property would snapshot the object that
     // existed at load time - doLogout() now reassigns the state variable
