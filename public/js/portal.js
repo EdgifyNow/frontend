@@ -1307,7 +1307,7 @@
     var page = paginate(filtered, state.contactPage);
     var crows = page.pageItems.map(function(c){
       return '<tr class="eg-clickrow" style="cursor:pointer" data-contact-drawer="' + esc(c.id) + '">' +
-        '<td><b>' + esc(contactName(c)) + '</b></td><td>' + esc(c.email || "-") + '</td><td>' + esc(c.phone || "-") + '</td><td>' + esc(c.company || "-") + '</td><td>' + esc(c.preferred_channel || "-") + '</td><td class="eg-small eg-muted">' + fmtDate(c.last_interaction_at) + '</td><td class="eg-small eg-muted">' + fmtDate(c.created_at) + '</td>' +
+        '<td><b>' + esc(contactName(c)) + '</b></td><td>' + esc(c.email || "-") + '</td><td>' + esc(c.phone || "-") + '</td><td>' + leadsForContact(c.id).length + '</td><td>' + esc(c.company || "-") + '</td><td>' + esc(c.preferred_channel || "-") + '</td><td class="eg-small eg-muted">' + fmtDate(c.last_interaction_at) + '</td><td class="eg-small eg-muted">' + fmtDate(c.created_at) + '</td>' +
         '<td><button class="eg-btn ghost" style="padding:4px 10px">View</button></td></tr>';
     }).join("");
     return '<div class="eg-card">' +
@@ -1316,7 +1316,7 @@
       '<select id="egContactDateFilter">' + selOpts([{value:"month",label:"This month"},{value:"quarter",label:"This Quarter"},{value:"year",label:"This year"},{value:"all",label:"All Time"}], state.contactDateFilter) + '</select>' +
       '<button class="eg-btn" id="egDownloadContactsCsv">Download Contacts CSV</button>' +
       '</div>' +
-      (crows ? '<table class="eg-table"><thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Company</th><th>Preferred Channel</th><th>Last Interaction</th><th>Created</th><th>Actions</th></tr></thead><tbody>' + crows + '</tbody></table>' : '<div class="eg-empty">' + (state.contactSearch ? "No matching contacts." : "No contacts in this period.") + '</div>') +
+      (crows ? '<table class="eg-table"><thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Leads</th><th>Company</th><th>Preferred Channel</th><th>Last Interaction</th><th>Created</th><th>Actions</th></tr></thead><tbody>' + crows + '</tbody></table>' : '<div class="eg-empty">' + (state.contactSearch ? "No matching contacts." : "No contacts in this period.") + '</div>') +
       pagerHtml("egContact", page, "contacts") +
       (state.contactDateFilter !== "all" ? '<div class="eg-small eg-muted" style="margin-top:10px">Only showing contacts created in the selected period. Older contacts aren\'t deleted - switch to "All Time" or use Download Contacts CSV to get full history.</div>' : "") +
       '</div>';
@@ -1616,7 +1616,11 @@
       '<div class="eg-tab' + (state.tab === "leads" ? " active" : "") + '" data-tab="leads">Leads</div>' +
       '<div class="eg-tab' + (state.tab === "contacts" ? " active" : "") + '" data-tab="contacts">Contacts</div>' +
       '<div class="eg-tab' + (state.tab === "appointments" ? " active" : "") + '" data-tab="appointments">Appointments</div>' +
-      '</div>';
+      '</div>' +
+      '<div class="eg-small eg-muted" id="egLeadsExplainer" style="margin:-4px 0 12px">' +
+      '<b>Contact</b> = the person (name, phone, email). <b>Lead</b> = one enquiry from them; its appointments belong to it. ' +
+      'The assistant adds new requests to the person&rsquo;s open lead, and starts a new lead once the last one is Won or Lost. ' +
+      'Same person twice? Open one contact and use <b>Merge</b>.</div>';
     var body = state.tab === "contacts" ? contactsTabHtml() : (state.tab === "appointments" ? appointmentsTabHtml() : leadsTabHtml());
     return tabs + body;
   }
@@ -1625,7 +1629,7 @@
     document.querySelectorAll("[data-tab]").forEach(function(el){
       el.addEventListener("click", function(){
         state.tab = el.getAttribute("data-tab");
-        if (state.tab === "contacts") ensureContacts();
+        if (state.tab === "contacts") { ensureContacts(); if (!state.leads) ensureLeads(); }
         if (state.tab === "appointments") ensureAllAppointments();
         render();
       });
@@ -3230,7 +3234,7 @@
       '<div class="eg-kv"><span>Phone</span><b>' + esc(c.phone || "-") + '</b></div>' +
       '<div class="eg-kv"><span>Company</span><b>' + esc(c.company || "-") + '</b></div>' +
       '<div class="eg-kv"><span>Job title</span><b>' + esc(c.job_title || "-") + '</b></div>' +
-      '<div class="eg-small eg-muted" style="margin-top:4px">Contact and Interest aren\'t editable yet - the backend doesn\'t support updating them here. Let support know if any of these need correcting.</div>' +
+      '<button class="eg-btn ghost small" id="egLeadOpenContact" data-open-contact="' + esc(r.contact_id) + '" style="margin-top:6px">Open contact to edit or merge</button>' +
       '<h4>Lead</h4>' +
       '<div class="eg-kv"><span>Interest</span><b>' + esc(r.service_interest || "-") + '</b></div>' +
       '<div class="eg-kv"><span>Source</span><b>' + esc(sourceLabel(r.source)) + '</b></div>' +
@@ -3252,36 +3256,135 @@
   }
 
   // ---- Contact detail drawer ----
-  // View-only, by design: GET /api/v1/crm/contacts is the only contacts
-  // endpoint that exists (confirmed against the current openapi.json) -
-  // there is no PATCH/PUT for contacts at all, so nothing here can be
-  // saved back. That's a backend gap to raise on the API side, not
-  // something missing from this binding.
+  // The person: their details (editable), every lead they have (each opens
+  // its own drawer), and "Merge" for the same person recorded twice - the
+  // other contact's leads, appointments and conversations move here and
+  // that contact is removed.
+  function leadsForContact(contactId){
+    return (state.leads || []).filter(function(l){ return l.contact_id === contactId; })
+      .sort(function(a, b){ return new Date(b.created_at) - new Date(a.created_at); });
+  }
   function contactDrawerHtml(){
     if (!state.contactDrawerId) return "";
     var c = (state.contacts || []).filter(function(x){ return x.id === state.contactDrawerId; })[0];
     if (!c) return "";
+    var field = function(id, label, value, type){
+      return '<div class="eg-form-row"><label>' + label + '</label><input class="eg-input" id="' + id + '" type="' + (type || "text") + '" value="' + esc(value || "") + '" /></div>';
+    };
+    var leads = leadsForContact(c.id);
+    var leadsHtml = leads.length
+      ? leads.map(function(l){
+          return '<div class="eg-listitem eg-clickrow" style="cursor:pointer" data-contact-lead="' + esc(l.id) + '">' +
+            '<span><b>' + esc(l.service_interest || l.title || "Lead") + '</b><div class="eg-small eg-muted">' + esc(sourceLabel(l.source)) + ' &middot; ' + fmtDate(l.created_at) + '</div></span>' +
+            statusPill(l.status) + '</div>';
+        }).join("")
+      : '<div class="eg-small eg-muted">No leads for this person.</div>';
+
+    var q = (state.contactMergeQuery || "").toLowerCase().trim();
+    var pick = state.contactMergePickId ? (state.contacts || []).filter(function(x){ return x.id === state.contactMergePickId; })[0] : null;
+    var mergeHtml;
+    if (pick) {
+      mergeHtml = '<div class="eg-statusbox" id="egMergeConfirm">' +
+        'Merge <b>' + esc(contactName(pick)) + '</b> (' + esc(pick.phone || pick.email || "no phone or email") + ') into <b>' + esc(contactName(c)) + '</b>? ' +
+        'Their ' + leadsForContact(pick.id).length + ' lead(s), appointments and conversations move here, missing details are filled in from them, and that contact is removed. This can&rsquo;t be undone.' +
+        '<div style="margin-top:8px;display:flex;gap:8px"><button class="eg-btn danger small" id="egMergeDo">Merge</button><button class="eg-btn ghost small" id="egMergeCancel">Cancel</button></div></div>';
+    } else {
+      var candidates = q ? (state.contacts || []).filter(function(x){
+        if (x.id === c.id) return false;
+        return [contactName(x), x.email, x.phone].filter(Boolean).join(" ").toLowerCase().indexOf(q) !== -1;
+      }).slice(0, 8) : [];
+      mergeHtml = '<input class="eg-input" id="egMergeSearch" placeholder="Find the other record by name, phone or email..." value="' + esc(state.contactMergeQuery || "") + '" autocomplete="off" />' +
+        (q ? (candidates.length ? candidates.map(function(x){
+          return '<div class="eg-clickrow" data-merge-pick="' + esc(x.id) + '" style="padding:8px;cursor:pointer;border:1px solid #e3e3e3;border-radius:6px;margin-top:4px">' +
+            '<b>' + esc(contactName(x)) + '</b> <span class="eg-small eg-muted">' + esc(x.phone || x.email || "") + '</span></div>';
+        }).join("") : '<div class="eg-small eg-muted" style="margin-top:6px">No other contact matches.</div>') : '');
+    }
+
     return '<div class="eg-drawer-backdrop open" id="egContactDrawerBackdrop"></div>' +
       '<aside class="eg-drawer open">' +
       '<button class="eg-drawer-close" id="egContactDrawerClose" aria-label="Close">&times;</button>' +
       '<h2>' + esc(contactName(c)) + '</h2>' +
-      '<div class="eg-drawer-sub">' + esc(c.company || "Contact") + '</div>' +
-      '<div class="eg-small eg-muted" style="margin:-6px 0 14px">Contact details aren\'t editable yet - the backend has no update endpoint for contacts. Let support know if anything here needs correcting.</div>' +
-      '<h4>Contact</h4>' +
-      '<div class="eg-kv"><span>Email</span><b>' + esc(c.email || "-") + '</b></div>' +
-      '<div class="eg-kv"><span>Phone</span><b>' + esc(c.phone || "-") + '</b></div>' +
-      '<div class="eg-kv"><span>Company</span><b>' + esc(c.company || "-") + '</b></div>' +
-      '<div class="eg-kv"><span>Job title</span><b>' + esc(c.job_title || "-") + '</b></div>' +
-      '<div class="eg-kv"><span>Preferred Channel</span><b>' + esc(c.preferred_channel || "-") + '</b></div>' +
-      '<div class="eg-kv"><span>Last Interaction</span><b>' + fmtDate(c.last_interaction_at) + '</b></div>' +
-      '<div class="eg-kv"><span>Created</span><b>' + fmtDate(c.created_at) + '</b></div>' +
+      '<div class="eg-drawer-sub">The person &middot; first seen ' + fmtDate(c.created_at) + (c.last_interaction_at ? ' &middot; last in touch ' + fmtDate(c.last_interaction_at) : '') + '</div>' +
+      '<h4>Details</h4>' +
+      field("egContactFirst", "First name", c.first_name) +
+      field("egContactLast", "Last name", c.last_name) +
+      field("egContactPhone", "Phone", c.phone, "tel") +
+      field("egContactEmail", "Email", c.email, "email") +
+      field("egContactCompany", "Company", c.company) +
+      field("egContactJob", "Job title", c.job_title) +
+      '<button class="eg-btn" id="egContactSave">Save Details</button>' +
+      '<h4 style="margin-top:18px">Leads <span class="eg-small eg-muted">(' + leads.length + ')</span></h4>' +
+      '<div class="eg-small eg-muted" style="margin-bottom:6px">Each enquiry from this person. Open one to see its appointments.</div>' +
+      '<div class="eg-list">' + leadsHtml + '</div>' +
+      '<h4 style="margin-top:18px">Same person recorded twice?</h4>' +
+      '<div class="eg-small eg-muted" style="margin-bottom:6px">Find the other record and merge it into this one.</div>' +
+      mergeHtml +
       '</aside>';
+  }
+  function closeContactDrawer(){
+    state.contactDrawerId = null;
+    state.contactMergeQuery = "";
+    state.contactMergePickId = null;
+    render();
   }
   function bindContactDrawer(){
     var backdrop = document.getElementById("egContactDrawerBackdrop");
-    if (backdrop) backdrop.addEventListener("click", function(){ state.contactDrawerId = null; render(); });
+    if (backdrop) backdrop.addEventListener("click", closeContactDrawer);
     var closeBtn = document.getElementById("egContactDrawerClose");
-    if (closeBtn) closeBtn.addEventListener("click", function(){ state.contactDrawerId = null; render(); });
+    if (closeBtn) closeBtn.addEventListener("click", closeContactDrawer);
+    var id = state.contactDrawerId;
+    var save = document.getElementById("egContactSave");
+    if (save) save.addEventListener("click", function(){
+      var val = function(elId){ return document.getElementById(elId).value.trim(); };
+      var body = { first_name: val("egContactFirst"), last_name: val("egContactLast"), phone: val("egContactPhone"),
+        email: val("egContactEmail"), company: val("egContactCompany"), job_title: val("egContactJob") };
+      save.disabled = true;
+      api("/api/v1/crm/contacts/" + id, { method: "PATCH", body: JSON.stringify(body) })
+        .then(function(updated){
+          state.contacts = (state.contacts || []).map(function(x){ return x.id === updated.id ? updated : x; });
+          showToast("Contact saved");
+          render();
+        })
+        .catch(function(err){ showToast(err.message, true); save.disabled = false; });
+    });
+    document.querySelectorAll("[data-contact-lead]").forEach(function(el){
+      el.addEventListener("click", function(){
+        state.contactDrawerId = null;
+        openLeadDrawer(el.getAttribute("data-contact-lead"));
+      });
+    });
+    var search = document.getElementById("egMergeSearch");
+    if (search) search.addEventListener("input", function(){
+      preserveFocus(function(){ state.contactMergeQuery = search.value; render(); });
+    });
+    document.querySelectorAll("[data-merge-pick]").forEach(function(el){
+      el.addEventListener("click", function(){ state.contactMergePickId = el.getAttribute("data-merge-pick"); render(); });
+    });
+    var cancel = document.getElementById("egMergeCancel");
+    if (cancel) cancel.addEventListener("click", function(){ state.contactMergePickId = null; render(); });
+    var doMerge = document.getElementById("egMergeDo");
+    if (doMerge) doMerge.addEventListener("click", function(){
+      var duplicateId = state.contactMergePickId;
+      doMerge.disabled = true;
+      api("/api/v1/crm/contacts/" + duplicateId + "/merge", { method: "POST", body: JSON.stringify({ into_contact_id: id }) })
+        .then(function(kept){
+          state.contacts = (state.contacts || []).filter(function(x){ return x.id !== duplicateId; })
+            .map(function(x){ return x.id === kept.id ? kept : x; });
+          state.leads = (state.leads || []).map(function(l){
+            if (l.contact_id !== duplicateId) return l;
+            var copy = {}; for (var k in l) copy[k] = l[k];
+            copy.contact_id = kept.id;
+            return copy;
+          });
+          state.allAppointments = null;
+          state.contactMergeQuery = "";
+          state.contactMergePickId = null;
+          showToast("Contacts merged");
+          render();
+          ensureLeads();
+        })
+        .catch(function(err){ showToast(err.message, true); doMerge.disabled = false; });
+    });
   }
 
   // Journey C: a visitor books via the widget (POST /api/v1/public/
@@ -3313,6 +3416,15 @@
     if (backdrop) backdrop.addEventListener("click", function(){ state.leadDrawerId = null; state.leadAppointments = null; render(); });
     var closeBtn = document.getElementById("egDrawerClose");
     if (closeBtn) closeBtn.addEventListener("click", function(){ state.leadDrawerId = null; state.leadAppointments = null; render(); });
+    var openContact = document.getElementById("egLeadOpenContact");
+    if (openContact) openContact.addEventListener("click", function(){
+      var contactId = openContact.getAttribute("data-open-contact");
+      state.leadDrawerId = null;
+      state.leadAppointments = null;
+      state.contactDrawerId = contactId;
+      if (!state.contacts) ensureContacts();
+      render();
+    });
     var statusSelectEl = document.getElementById("egDrawerStatus");
     var lostReasonRow = document.getElementById("egDrawerLostReasonRow");
     if (statusSelectEl && lostReasonRow) {
@@ -4861,6 +4973,11 @@
       bindKnowledge: bindKnowledge,
       renderCaptureTile: renderCaptureTile,
       clientDashboardHtml: clientDashboardHtml,
+      leadsHtml: leadsHtml,
+      contactDrawerHtml: contactDrawerHtml,
+      bindContactDrawer: bindContactDrawer,
+      leadDrawerHtml: leadDrawerHtml,
+      bindDrawer: bindDrawer,
       sortAppointments: sortAppointments
     };
     // A plain "state: state" property would snapshot the object that
