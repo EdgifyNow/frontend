@@ -571,10 +571,25 @@
           });
         }).catch(function(){ return []; });
       })).then(function(lists){
-        var all = [].concat.apply([], lists).sort(function(x, y){ return new Date(x.start_at) - new Date(y.start_at); });
+        var all = sortAppointments([].concat.apply([], lists));
         if (setIfChanged("allAppointments", all)) render();
       });
     }).catch(function(err){ showToast(err.message, true); });
+  }
+  // Upcoming appointments first, soonest at the top; then past ones, most
+  // recent first - so the list opens on what's next, not on last month.
+  // Re-applied after an edit or a new booking, so a rescheduled one moves.
+  // start_at is wall-clock digits tagged UTC (see fmtApptDateTime), so
+  // "now" is compared in that same form: the viewer's own clock digits.
+  function sortAppointments(list, nowDate){
+    var n = nowDate || new Date();
+    var now = Date.UTC(n.getFullYear(), n.getMonth(), n.getDate(), n.getHours(), n.getMinutes());
+    return list.slice().sort(function(x, y){
+      var a = new Date(x.start_at).getTime(), b = new Date(y.start_at).getTime();
+      var aPast = a < now, bPast = b < now;
+      if (aPast !== bPast) return aPast ? 1 : -1;
+      return aPast ? b - a : a - b;
+    });
   }
   function ensureWidgetKey(){
     api("/api/v1/integrations/widget-key").then(function(d){ state.widgetKey = d; render(); }).catch(function(err){ showToast(err.message, true); });
@@ -947,7 +962,15 @@
     var wonCount = rows.filter(function(r){ return r.status === "won"; }).length;
 
     var todayKey = now.getFullYear() + "-" + String(now.getMonth() + 1).padStart(2, "0") + "-" + String(now.getDate()).padStart(2, "0");
-    var todayRows = rows.filter(function(r){ return (r.created_at || "").slice(0, 10) === todayKey; })
+    // The day each lead was created on in the viewer's own calendar, not
+    // the UTC date in the timestamp's text - that rolled over to "tomorrow"
+    // every evening (8 pm Eastern), hiding the evening's leads from today.
+    var localDayKey = function(iso){
+      var d = new Date(iso);
+      if (isNaN(d)) return "";
+      return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+    };
+    var todayRows = rows.filter(function(r){ return localDayKey(r.created_at) === todayKey; })
       .sort(function(a, b){ return new Date(b.created_at) - new Date(a.created_at); });
     var todayHtml = todayRows.map(function(r){
       return '<tr class="eg-clickrow" style="cursor:pointer" data-lead-drawer="' + esc(r.id) + '">' +
@@ -1440,7 +1463,7 @@
               return copy;
             });
           };
-          if (state.allAppointments) state.allAppointments = mergeInto(state.allAppointments);
+          if (state.allAppointments) state.allAppointments = sortAppointments(mergeInto(state.allAppointments));
           if (state.leadAppointments) state.leadAppointments = mergeInto(state.leadAppointments);
           showToast("Appointment updated");
           state.appointmentDrawerId = null;
@@ -1569,9 +1592,7 @@
           // null (it fetches everything itself when opened) rather than
           // turning it into a one-item list.
           if (state.allAppointments) {
-            state.allAppointments = state.allAppointments.concat([copy]).sort(function(x, y){
-              return new Date(x.start_at) - new Date(y.start_at);
-            });
+            state.allAppointments = sortAppointments(state.allAppointments.concat([copy]));
           }
           // If that lead's drawer is open underneath, show the new
           // appointment there, and refresh leads (a booking can clear a
@@ -4838,7 +4859,9 @@
       tenantDetailHtml: tenantDetailHtml,
       knowledgeHtml: knowledgeHtml,
       bindKnowledge: bindKnowledge,
-      renderCaptureTile: renderCaptureTile
+      renderCaptureTile: renderCaptureTile,
+      clientDashboardHtml: clientDashboardHtml,
+      sortAppointments: sortAppointments
     };
     // A plain "state: state" property would snapshot the object that
     // existed at load time - doLogout() now reassigns the state variable
