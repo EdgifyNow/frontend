@@ -127,6 +127,9 @@
     btError: null,
     myQuestions: null,
     tenantQuestions: null,
+    knowledgeCheck: null,
+    knowledgeChecking: false,
+    tenantKnowledgeCheck: null,
     whatsappKnownArrivalIds: null,
     newArrivals: {},
     unseenArrivals: 0,
@@ -540,6 +543,10 @@
   }
   function ensureDocuments(){
     api("/api/v1/documents").then(function(d){ if (setIfChanged("documents", d)) render(); }).catch(function(err){ showToast(err.message, true); });
+    ensureKnowledgeCheck();
+  }
+  function ensureKnowledgeCheck(){
+    api("/api/v1/tenants/me/knowledge-check").then(function(d){ if (setIfChanged("knowledgeCheck", d)) render(); }).catch(function(){});
   }
   // No GET /crm/appointments exists - only GET /crm/leads/{id}/appointments,
   // one lead at a time. Loads leads first (if needed), then fetches every
@@ -613,9 +620,12 @@
     state.tenantDetail = null;
     state.tenantUsageSummary = null;
     state.tenantQuestions = null;
+    state.tenantKnowledgeCheck = null;
     render();
     if (!state.businessTypes) ensureBusinessTypes();
     loadTenantQuestions(id);
+    api("/api/v1/admin/tenants/" + id + "/knowledge-check").then(function(d){ state.tenantKnowledgeCheck = d; render(); })
+      .catch(function(){ state.tenantKnowledgeCheck = null; });
     api("/api/v1/admin/tenants/" + id).then(function(d){
       state.tenantDetail = d;
       render();
@@ -1687,9 +1697,9 @@
   // a page reload.
   var CHANNEL_ACTIVE_STATUSES = ["new", "in_progress", "ready"];
   var CHANNEL_REFRESH_MS = 7000;
-  var CHANNEL_TYPE_COLOR = { order: "red", reservation: "purple", catering: "amber", appointment: "purple", lead: "green", general_inquiry: "blue" };
-  var CHANNEL_TYPE_ICON = { order: "&#128722;", reservation: "&#127860;", catering: "&#127869;", appointment: "&#128197;", lead: "&#128100;", general_inquiry: "&#128172;" };
-  var CHANNEL_TYPE_OPTIONS = ["order", "reservation", "catering", "appointment", "lead", "general_inquiry"];
+  var CHANNEL_TYPE_COLOR = { order: "red", reservation: "purple", catering: "amber", quote: "amber", appointment: "purple", lead: "green", general_inquiry: "blue" };
+  var CHANNEL_TYPE_ICON = { order: "&#128722;", reservation: "&#127860;", catering: "&#127869;", quote: "&#128221;", appointment: "&#128197;", lead: "&#128100;", general_inquiry: "&#128172;" };
+  var CHANNEL_TYPE_OPTIONS = ["order", "reservation", "catering", "quote", "appointment", "lead", "general_inquiry"];
   // A new order is waiting on staff: the caller was told it was "sent to
   // our team to confirm", so it's approved (-> In Progress) or rejected
   // (-> Cancelled) before anything else - the backend refuses any other
@@ -1816,7 +1826,7 @@
   // doesn't sit unseen when nobody is looking at the board. Only for ones
   // created in the last few minutes, so changing a filter that reveals
   // older ones never sets it off.
-  var ARRIVAL_ALERT_TYPES = ["order", "catering", "reservation", "appointment"];
+  var ARRIVAL_ALERT_TYPES = ["order", "catering", "quote", "reservation", "appointment"];
   var ARRIVAL_RECENT_MS = 10 * 60 * 1000;
   var ARRIVAL_HIGHLIGHT_MS = 60 * 1000;
   var BASE_TITLE = document.title;
@@ -1824,7 +1834,7 @@
   function noteNewArrivals(cfg, captures){
     var knownKey = cfg.key + "KnownArrivalIds";
     var waiting = (captures || []).filter(function(v){
-      return ARRIVAL_ALERT_TYPES.indexOf(v.capture_type) !== -1 && v.status === "new" && (v.needs_review || v.capture_type === "catering");
+      return ARRIVAL_ALERT_TYPES.indexOf(v.capture_type) !== -1 && v.status === "new" && (v.needs_review || v.capture_type === "catering" || v.capture_type === "quote");
     });
     var known = state[knownKey];
     var now = Date.now();
@@ -1976,6 +1986,7 @@
     var byNewest = function(a, b){ return new Date(b.created_at) - new Date(a.created_at); };
     var orders = captures.filter(function(v){ return v.capture_type === "order"; });
     var catering = captures.filter(function(v){ return v.capture_type === "catering"; }).sort(byNewest);
+    var quotes = captures.filter(function(v){ return v.capture_type === "quote"; }).sort(byNewest);
     var reservations = captures.filter(function(v){ return v.capture_type === "reservation"; }).sort(byNewest);
     var appts = captures.filter(function(v){ return v.capture_type === "appointment"; }).sort(byNewest);
     var inquiries = captures.filter(function(v){ return v.capture_type === "general_inquiry" || v.capture_type === "lead"; }).sort(byNewest);
@@ -1999,6 +2010,7 @@
     if (orders.length) sections += sectionHtml("Orders", "Approve → In Progress → Ready", orders.length, ordersHtml);
     if (reservations.length) sections += sectionHtml("Reservations", "Approve → Confirmed", reservations.length, '<div class="eg-tilegrid">' + reservations.map(function(v){ return renderCaptureTile(v, cfg); }).join("") + '</div>');
     if (catering.length) sections += sectionHtml("Catering requests", "Call back to discuss", catering.length, '<div class="eg-tilegrid">' + catering.map(function(v){ return renderCaptureTile(v, cfg); }).join("") + '</div>');
+    if (quotes.length) sections += sectionHtml("Quote requests", "Call back with a quote", quotes.length, '<div class="eg-tilegrid">' + quotes.map(function(v){ return renderCaptureTile(v, cfg); }).join("") + '</div>');
     if (appts.length) sections += sectionHtml("Appointments", "Newest first", appts.length, '<div class="eg-tilegrid">' + appts.map(function(v){ return renderCaptureTile(v, cfg); }).join("") + '</div>');
     if (inquiries.length) sections += sectionHtml("Inquiries & Leads", "Newest first", inquiries.length, '<div class="eg-tilegrid">' + inquiries.map(function(v){ return renderCaptureTile(v, cfg); }).join("") + '</div>');
 
@@ -2270,8 +2282,11 @@
   function renderAppointmentTile(v, cfg){
     var st = appointmentState(v);
     var d = v.details || {};
-    var service = formatDetailValue(d.service || d.services || "");
+    // A service visit (garage door, handyman) says what's wrong and where.
+    var service = formatDetailValue(d.service || d.services || d.issue || "");
+    var address = formatDetailValue(d.address || "");
     var issue = v.booking_status === "needs_scheduling" && v.booking_issue ? (BOOKING_ISSUE_TEXT[v.booking_issue] || channelStatusLabel(v.booking_issue)) : "";
+    if (v.booking_issue === "missing_fields" && (d.requested_date || d.requested_date_text)) issue = "no time given";
     return '<div class="eg-vtile purple' + (st.action ? ' needs-action' : '') + (isNewArrival(v.id) ? ' is-new-arrival' : '') + '"' + tileOpenAttrs(v, cfg) + '>' +
       '<div class="eg-vtile-top">' +
       '<div class="eg-order-ref">' + CHANNEL_TYPE_ICON.appointment + ' APPOINTMENT</div>' +
@@ -2280,6 +2295,7 @@
       cardWhoHtml(v) +
       '<div class="eg-order-fulfil">' + esc(appointmentWhenText(v)) + '</div>' +
       (service ? '<div class="eg-small" style="margin-top:2px">' + esc(service) + '</div>' : '') +
+      (address ? '<div class="eg-small eg-muted" style="margin-top:2px" data-appt-address>&#128205; ' + esc(address) + '</div>' : '') +
       (issue ? '<div class="eg-small" style="margin-top:4px;color:var(--red)">' + esc(issue.charAt(0).toUpperCase() + issue.slice(1)) + ' &mdash; call to arrange</div>' : '') +
       textStatusHtml(v) +
       cardFootHtml(v) +
@@ -2320,7 +2336,7 @@
     var badgeColor = CHANNEL_STATUS_BADGE[v.status] || "navy";
     // A catering request is like an inquiry: nothing to run through stages,
     // the owner calls back and marks it handled.
-    var isInquiry = v.capture_type === "general_inquiry" || v.capture_type === "catering";
+    var isInquiry = v.capture_type === "general_inquiry" || v.capture_type === "catering" || v.capture_type === "quote";
     var nextStatus = CHANNEL_NEXT_STATUS[v.status];
     var isDone = v.status === "completed" || v.status === "cancelled";
 
@@ -2328,7 +2344,7 @@
     if (isInquiry) {
       if (!isDone) {
         actionsHtml = '<div class="eg-vtile-actions">' +
-          '<button class="eg-btn small ghost" data-channel-action="' + cfg.key + '" data-channel-action-id="' + esc(v.id) + '" data-channel-action-status="completed">' + (v.capture_type === "catering" ? "Mark handled" : "Dismiss") + '</button>' +
+          '<button class="eg-btn small ghost" data-channel-action="' + cfg.key + '" data-channel-action-id="' + esc(v.id) + '" data-channel-action-status="completed">' + (v.capture_type === "catering" || v.capture_type === "quote" ? "Mark handled" : "Dismiss") + '</button>' +
           '</div>';
       }
     } else if (!isDone) {
@@ -3331,6 +3347,46 @@
   }
 
   // ---- Knowledge ----
+  // "Verify my information": whether the documents cover what this kind of
+  // business's customers ask about (the business type's checklist plus the
+  // client's own facts) - each fact found with the line that answers it, or
+  // missing. The owner runs it here; the admin sees the same, read-only, on
+  // Client details.
+  var KNOWLEDGE_STATUS = {
+    not_verified: { label: "Not verified", cls: "", note: "Run a check to see whether your documents answer what customers ask." },
+    basic_missing: { label: "Basic information missing", cls: " red", note: "Some must-have information isn't in your documents yet." },
+    mostly_ready: { label: "Mostly ready", cls: " amber", note: "The must-haves are covered; a few helpful extras are missing." },
+    ready: { label: "Ready", cls: " green", note: "Your documents cover everything on the checklist." },
+    out_of_date: { label: "Out of date", cls: " amber", note: "Documents or the checklist changed since the last check. Verify again." }
+  };
+  function knowledgeCheckHtml(view, canVerify){
+    if (!view) return '<div class="eg-card"><h3>Knowledge check</h3><div class="eg-empty">Loading...</div></div>';
+    var info = KNOWLEDGE_STATUS[view.status] || KNOWLEDGE_STATUS.not_verified;
+    var checked = view.checked_at ? 'Last checked ' + fmtDate(view.checked_at) : 'Never checked';
+    var facts = (view.facts || []).map(function(f){
+      var mark = f.found === true ? '<span style="color:var(--green)">&#10003;</span>'
+        : f.found === false ? '<span style="color:var(--red)">&#10007;</span>' : '<span class="eg-muted">&bull;</span>';
+      var level = f.level === "required" ? '<span class="eg-pill" style="margin-left:6px">Must have</span>' : '';
+      var detail = f.found === true && f.quote
+        ? '<div class="eg-small eg-muted" style="margin-left:22px">&ldquo;' + esc(f.quote) + '&rdquo;' + (f.filename ? ' &middot; ' + esc(f.filename) : '') + '</div>'
+        : f.found === false ? '<div class="eg-small" style="margin-left:22px;color:var(--red)">Not found in your documents</div>' : '';
+      return '<li style="list-style:none;margin:6px 0">' + mark + ' ' + esc(f.fact) + level + detail + '</li>';
+    }).join("");
+    var asked = (view.customers_also_asked || []);
+    var askedHtml = asked.length
+      ? '<h4 style="margin-top:14px">Customers also asked</h4><div class="eg-small eg-muted" style="margin-bottom:6px">Questions the assistant couldn&rsquo;t answer in the last 30 days. Adding the answers to your documents helps.</div>' +
+        '<ul style="margin:0;padding-left:18px">' + asked.map(function(q){ return '<li class="eg-small">' + esc(q) + '</li>'; }).join("") + '</ul>'
+      : '';
+    var button = canVerify
+      ? '<button class="eg-btn" id="egVerifyKnowledge"' + (state.knowledgeChecking ? ' disabled' : '') + '>' + (state.knowledgeChecking ? 'Checking...' : 'Verify my information') + '</button>'
+      : '';
+    return '<div class="eg-card" id="egKnowledgeCheck">' +
+      '<div class="eg-row"><h3>Knowledge check <span class="eg-pill' + info.cls + '" data-knowledge-status="' + esc(view.status) + '">' + info.label + '</span></h3>' + button + '</div>' +
+      '<div class="eg-small eg-muted" style="margin-bottom:8px">' + info.note + ' ' + checked + '.</div>' +
+      '<ul style="margin:0;padding:0">' + facts + '</ul>' + askedHtml +
+      '</div>';
+  }
+
   function knowledgeHtml(){
     var docs = state.documents;
     var body = "";
@@ -3354,7 +3410,8 @@
       body = '<div class="eg-list">' + rows + '</div>';
       pager = pagerHtml("egKnowledge", page, "documents");
     }
-    return '<div class="eg-card">' +
+    return knowledgeCheckHtml(state.knowledgeCheck, true) +
+      '<div class="eg-card" style="margin-top:16px">' +
       '<div class="eg-row"><h3>Documents</h3><label class="eg-btn" style="cursor:pointer">Upload document<input type="file" id="egFileInput" accept=".pdf,.doc,.docx" style="display:none" /></label></div>' +
       body +
       pager +
@@ -3363,6 +3420,17 @@
   }
 
   function bindKnowledge(){
+    var verify = document.getElementById("egVerifyKnowledge");
+    if (verify) {
+      verify.addEventListener("click", function(){
+        state.knowledgeChecking = true;
+        render();
+        api("/api/v1/tenants/me/knowledge-check", { method: "POST" })
+          .then(function(d){ state.knowledgeCheck = d; showToast("Check complete"); })
+          .catch(function(err){ showToast(err.message, true); })
+          .then(function(){ state.knowledgeChecking = false; render(); });
+      });
+    }
     var fileInput = document.getElementById("egFileInput");
     if (fileInput) {
       fileInput.addEventListener("change", function(){
@@ -3777,7 +3845,8 @@
       channelSummaryHtml(t) +
       '<div class="eg-card" style="margin-top:16px"><h3>Questions for this client</h3>' +
       '<div class="eg-small eg-muted" style="margin-bottom:10px">Changes the client asked for, on top of their business type. The client can make these themselves on their My Questions page too.</div>' +
-      questionsEditorHtml(state.tenantQuestions, "tq") + '</div>';
+      questionsEditorHtml(state.tenantQuestions, "tq") + '</div>' +
+      '<div style="margin-top:16px">' + knowledgeCheckHtml(state.tenantKnowledgeCheck, false) + '</div>';
   }
 
   // High-level per-channel usage/leads summary, from GET
@@ -4766,7 +4835,10 @@
       bindBusinessTypeEdit: bindBusinessTypeEdit,
       myQuestionsHtml: myQuestionsHtml,
       bindMyQuestions: bindMyQuestions,
-      tenantDetailHtml: tenantDetailHtml
+      tenantDetailHtml: tenantDetailHtml,
+      knowledgeHtml: knowledgeHtml,
+      bindKnowledge: bindKnowledge,
+      renderCaptureTile: renderCaptureTile
     };
     // A plain "state: state" property would snapshot the object that
     // existed at load time - doLogout() now reassigns the state variable
