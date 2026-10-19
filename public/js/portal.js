@@ -681,7 +681,6 @@
     if (v === "tenants") { ensureTenants(); if (!state.businessTypes) ensureBusinessTypes(); }
     if (v === "businessTypes") ensureBusinessTypes();
     if (v === "questions") ensureMyQuestions();
-    if (v === "menu") ensureMenu();
     if (v === "demo") { ensureAssistants(); ensureDocuments(); }
     if (v === "integrations") { ensureWidgetKey(); ensureGoogleCalendarStatus(); }
     if (v === "voice") { loadChannelCaptures(CHANNEL_ACTIVITY.voice); startChannelAutoRefresh(CHANNEL_ACTIVITY.voice); }
@@ -761,9 +760,6 @@
     // is the global production on/off switch, checked first: Voice/WhatsApp
     // aren't in V1 scope, so this stays hidden for every tenant in
     // production regardless of their own per-tenant enablement.
-    if (state.tenantSelf && state.tenantSelf.business_type === "restaurant") {
-      items.splice(3, 0, { id: "menu", label: "Menu", icon: "doc" });
-    }
     if (featureVoiceWhatsapp() && state.tenantSelf && state.tenantSelf.voice_enabled) {
       items.splice(3, 0, { id: "voice", label: "Voice Activity", icon: "phone" });
     }
@@ -840,7 +836,6 @@
     if (state.view === "businessTypes") return "Business Types";
     if (state.view === "businessTypeEdit") return state.btDraft ? state.btDraft.label : "Business type";
     if (state.view === "questions") return "My Questions";
-    if (state.view === "menu") return "Menu";
     if (state.view === "voice") return "Voice Activity";
     if (state.view === "whatsapp") return "WhatsApp Activity";
     return "";
@@ -858,7 +853,6 @@
     if (state.view === "businessTypes") return "Questions and knowledge checklists for each kind of business.";
     if (state.view === "businessTypeEdit") return "Changes go live from the next call. Every save is kept in the history.";
     if (state.view === "questions") return "What your assistant asks your customers.";
-    if (state.view === "menu") return "What customers can order, with prices and choices.";
     if (state.view === "voice") return "Live calls, orders, and appointments captured by your voice assistant.";
     if (state.view === "whatsapp") return "Live orders, appointments, and leads captured over WhatsApp.";
     return "";
@@ -879,7 +873,6 @@
     if (state.view === "businessTypes") { el.innerHTML = businessTypesHtml(); bindBusinessTypes(); return; }
     if (state.view === "businessTypeEdit") { el.innerHTML = businessTypeEditHtml(); bindBusinessTypeEdit(); return; }
     if (state.view === "questions") { el.innerHTML = myQuestionsHtml(); bindMyQuestions(); return; }
-    if (state.view === "menu") { el.innerHTML = menuHtml(); bindMenu(); return; }
     if (state.view === "voice") { el.innerHTML = voiceHtml(); bindVoice(); return; }
     if (state.view === "whatsapp") { el.innerHTML = whatsappHtml(); bindWhatsapp(); return; }
   }
@@ -2086,8 +2079,8 @@
       (notes.length ? ' <span class="note">&mdash; ' + esc(notes.join(", ")) + '</span>' : '') + '</span></li>';
   }
 
-  // A menu order (app/menu.py): each line with its choices and price, and
-  // the total the customer heard.
+  // A restaurant order priced from its uploaded menu: each line with its
+  // price, and the total (for staff; the customer hears it only if they ask).
   function menuOrderLinesHtml(details){
     var cur = details.currency || "$";
     var money = function(v){ return v === null || v === undefined || v === "" ? "" : cur + Number(v).toFixed(2); };
@@ -2715,7 +2708,7 @@
       '<div class="eg-form-row"><label>Words callers often say <span class="eg-small eg-muted">(dish names and other words the assistant might mishear, separated by commas)</span></label>' +
       '<textarea class="eg-textarea" id="egVoiceSpeechHints" placeholder="Butter Naan, Malai Kofta, Gulab Jamun">' + esc(s.voice_speech_hints || "") + '</textarea>' +
       (state.tenantSelf && state.tenantSelf.business_type === "restaurant"
-        ? '<div class="eg-small eg-muted" style="margin-top:4px">With menu ordering on, every dish on your Menu page is added automatically - list only other words here.</div>'
+        ? '<div class="eg-small eg-muted" style="margin-top:4px">Dish names from the menu you upload on the Knowledge page are added automatically - list only other words here.</div>'
         : '') + '</div>' +
       '<div class="eg-form-row"><label>Callers book</label>' +
       '<select class="eg-select" id="egBookingKind" style="max-width:280px">' +
@@ -4558,163 +4551,6 @@
   }
   function bindMyQuestions(){ bindQuestionsEditor("myQuestions", "mq", "/api/v1/tenants/me/questions"); }
 
-  // ---- Menu (restaurants only) ----
-  // The structured menu orders are taken against: each dish with its price,
-  // the names customers use for it, and choices (spice level, size, extras)
-  // that can add to the price. "Read my menu from my documents" has the
-  // assistant fill it from the uploaded menu for the owner to check; nothing
-  // is used for orders until they save it and turn menu ordering on.
-  function ensureMenu(){
-    api("/api/v1/menu").then(function(d){
-      state.menu = d;
-      state.menuDraft = JSON.parse(JSON.stringify(d.definition || { currency: "$", items: [] }));
-      state.menuError = null;
-      state.menuDirty = false;
-      render();
-    }).catch(function(err){ showToast(err.message, true); });
-  }
-  var MENU_SELECTION_LABEL = { one_required: "Pick one (required)", one_optional: "Pick one (optional)", many_optional: "Any number (extras)" };
-  function menuHtml(){
-    var m = state.menu, draft = state.menuDraft;
-    if (!m || !draft) return '<div class="eg-card"><div class="eg-empty">Loading menu...</div></div>';
-    var cur = draft.currency || "$";
-    var items = (draft.items || []).map(function(item, i){
-      var groups = (item.groups || []).map(function(g, gi){
-        var opts = (g.options || []).map(function(o, oi){
-          var at = i + ":" + gi + ":" + oi;
-          return '<div style="display:flex;gap:6px;margin-top:4px;align-items:center">' +
-            '<input class="eg-input" style="flex:2" data-mo-label="' + at + '" value="' + esc(o.label || "") + '" placeholder="Option, e.g. Medium" />' +
-            '<input class="eg-input" style="flex:1;max-width:110px" data-mo-price="' + at + '" value="' + esc(o.price_delta && Number(o.price_delta) ? o.price_delta : "") + '" placeholder="+ ' + esc(cur) + '0" />' +
-            '<button class="eg-btn ghost small" data-mo-del="' + at + '" title="Remove option">&times;</button></div>';
-        }).join("");
-        var sel = Object.keys(MENU_SELECTION_LABEL).map(function(k){
-          return '<option value="' + k + '"' + (g.selection === k ? " selected" : "") + '>' + MENU_SELECTION_LABEL[k] + '</option>';
-        }).join("");
-        var gat = i + ":" + gi;
-        return '<div class="eg-statusbox" style="margin-top:8px">' +
-          '<div style="display:flex;gap:6px;align-items:center">' +
-          '<input class="eg-input" style="flex:2" data-mg-name="' + gat + '" value="' + esc(g.name || "") + '" placeholder="Choice, e.g. Spice level" />' +
-          '<select class="eg-select" style="flex:1" data-mg-sel="' + gat + '">' + sel + '</select>' +
-          '<button class="eg-btn ghost small" data-mg-del="' + gat + '" title="Remove this choice">&times;</button></div>' +
-          opts +
-          '<button class="eg-btn ghost small" data-mo-add="' + gat + '" style="margin-top:6px">+ Option</button></div>';
-      }).join("");
-      return '<div class="eg-card" style="margin-top:10px" data-menu-item="' + i + '">' +
-        '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">' +
-        '<input class="eg-input" style="flex:3;min-width:180px" data-mi-name="' + i + '" value="' + esc(item.name || "") + '" placeholder="Dish name" />' +
-        '<input class="eg-input" style="flex:1;min-width:90px;max-width:120px" data-mi-price="' + i + '" value="' + esc(item.price === null || item.price === undefined ? "" : item.price) + '" placeholder="' + esc(cur) + ' price" />' +
-        '<input class="eg-input" style="flex:2;min-width:120px" data-mi-cat="' + i + '" value="' + esc(item.category || "") + '" placeholder="Section, e.g. Breads" />' +
-        '<label class="eg-small" style="white-space:nowrap"><input type="checkbox" data-mi-avail="' + i + '"' + (item.available === false ? "" : " checked") + ' /> Available</label>' +
-        '<button class="eg-btn ghost small" data-mi-del="' + i + '" title="Remove dish">Remove</button></div>' +
-        '<input class="eg-input" style="margin-top:6px" data-mi-aka="' + i + '" value="' + esc((item.aliases || []).join(", ")) + '" placeholder="Other names customers use, comma separated (e.g. naan, garlic nan)" />' +
-        groups +
-        '<button class="eg-btn ghost small" data-mg-add="' + i + '" style="margin-top:8px">+ Choice (size, spice level, extras)</button>' +
-        '</div>';
-    }).join("");
-    var count = (draft.items || []).length;
-    var status = m.published
-      ? '<span class="eg-pill green">Menu ordering is on</span>'
-      : '<span class="eg-pill">Menu ordering is off</span>';
-    return '<div class="eg-card">' +
-      '<div class="eg-row"><h3>Your menu ' + status + '</h3>' +
-      '<span style="display:flex;gap:8px;flex-wrap:wrap">' +
-      '<button class="eg-btn ghost" id="egMenuImport"' + (state.menuImporting ? " disabled" : "") + '>' + (state.menuImporting ? "Reading your menu..." : "Read my menu from my documents") + '</button>' +
-      '<button class="eg-btn ghost" id="egMenuPublish">' + (m.published ? "Turn off menu ordering" : "Turn on menu ordering") + '</button>' +
-      '</span></div>' +
-      '<div class="eg-small eg-muted">With menu ordering on, the assistant takes phone and WhatsApp orders item by item from this menu: it asks for required choices, refuses anything not on it, and reads back each price and the total (before tax). ' +
-      'Dish names also help the phone line hear them. Check prices carefully - customers hear them.</div>' +
-      (state.menuDirty ? '<div class="eg-small" style="margin-top:8px;color:var(--amber, #b7791f)">You have unsaved changes.</div>' : '') +
-      (state.menuError ? '<div class="eg-small" id="egMenuError" style="margin-top:8px;color:var(--red)">' + esc(state.menuError) + '</div>' : '') +
-      '<div class="eg-form-row" style="margin-top:10px;max-width:160px"><label>Currency symbol</label><input class="eg-input" id="egMenuCurrency" value="' + esc(cur) + '" /></div>' +
-      '</div>' +
-      (count ? items : '<div class="eg-card" style="margin-top:10px"><div class="eg-empty">No dishes yet. Read them from your uploaded menu, or add them one by one.</div></div>') +
-      '<div style="display:flex;gap:8px;margin-top:12px">' +
-      '<button class="eg-btn ghost" id="egMenuAddItem">+ Dish</button>' +
-      '<button class="eg-btn" id="egMenuSave">Save menu</button>' +
-      '</div>';
-  }
-  function bindMenu(){
-    var draft = state.menuDraft;
-    if (!draft) return;
-    var parts = function(el, attr){ return el.getAttribute(attr).split(":").map(Number); };
-    var dirty = function(){ state.menuDirty = true; };
-    var restructure = function(fn){ return function(e){ fn(e.currentTarget); state.menuDirty = true; render(); }; };
-    var on = function(selector, event, fn){ document.querySelectorAll(selector).forEach(function(el){ el.addEventListener(event, function(){ fn(el); dirty(); }); }); };
-
-    on("[data-mi-name]", "input", function(el){ draft.items[+el.getAttribute("data-mi-name")].name = el.value; });
-    on("[data-mi-price]", "input", function(el){ draft.items[+el.getAttribute("data-mi-price")].price = el.value.trim() === "" ? null : el.value.trim(); });
-    on("[data-mi-cat]", "input", function(el){ draft.items[+el.getAttribute("data-mi-cat")].category = el.value.trim() || null; });
-    on("[data-mi-avail]", "change", function(el){ draft.items[+el.getAttribute("data-mi-avail")].available = el.checked; });
-    on("[data-mi-aka]", "input", function(el){
-      draft.items[+el.getAttribute("data-mi-aka")].aliases = el.value.split(",").map(function(a){ return a.trim(); }).filter(Boolean);
-    });
-    on("[data-mg-name]", "input", function(el){ var p = parts(el, "data-mg-name"); draft.items[p[0]].groups[p[1]].name = el.value; });
-    on("[data-mg-sel]", "change", function(el){ var p = parts(el, "data-mg-sel"); draft.items[p[0]].groups[p[1]].selection = el.value; });
-    on("[data-mo-label]", "input", function(el){ var p = parts(el, "data-mo-label"); draft.items[p[0]].groups[p[1]].options[p[2]].label = el.value; });
-    on("[data-mo-price]", "input", function(el){ var p = parts(el, "data-mo-price"); draft.items[p[0]].groups[p[1]].options[p[2]].price_delta = el.value.trim() || "0"; });
-    var currency = document.getElementById("egMenuCurrency");
-    if (currency) currency.addEventListener("input", function(){ draft.currency = currency.value.trim() || "$"; dirty(); });
-
-    document.querySelectorAll("[data-mi-del]").forEach(function(el){
-      el.addEventListener("click", restructure(function(t){ draft.items.splice(+t.getAttribute("data-mi-del"), 1); }));
-    });
-    document.querySelectorAll("[data-mg-add]").forEach(function(el){
-      el.addEventListener("click", restructure(function(t){
-        var item = draft.items[+t.getAttribute("data-mg-add")];
-        item.groups = item.groups || [];
-        item.groups.push({ name: "", selection: "one_optional", options: [{ label: "", price_delta: "0" }] });
-      }));
-    });
-    document.querySelectorAll("[data-mg-del]").forEach(function(el){
-      el.addEventListener("click", restructure(function(t){ var p = parts(t, "data-mg-del"); draft.items[p[0]].groups.splice(p[1], 1); }));
-    });
-    document.querySelectorAll("[data-mo-add]").forEach(function(el){
-      el.addEventListener("click", restructure(function(t){ var p = parts(t, "data-mo-add"); draft.items[p[0]].groups[p[1]].options.push({ label: "", price_delta: "0" }); }));
-    });
-    document.querySelectorAll("[data-mo-del]").forEach(function(el){
-      el.addEventListener("click", restructure(function(t){ var p = parts(t, "data-mo-del"); draft.items[p[0]].groups[p[1]].options.splice(p[2], 1); }));
-    });
-    var add = document.getElementById("egMenuAddItem");
-    if (add) add.addEventListener("click", restructure(function(){ draft.items.push({ name: "", price: null, aliases: [], groups: [], available: true }); }));
-
-    var save = document.getElementById("egMenuSave");
-    if (save) save.addEventListener("click", function(){
-      save.disabled = true;
-      api("/api/v1/menu", { method: "PUT", body: JSON.stringify({ definition: draft }) })
-        .then(function(d){
-          state.menu = d;
-          state.menuDraft = JSON.parse(JSON.stringify(d.definition));
-          state.menuError = null;
-          state.menuDirty = false;
-          showToast("Menu saved");
-          render();
-        })
-        .catch(function(err){ state.menuError = err.message; save.disabled = false; render(); });
-    });
-    var publish = document.getElementById("egMenuPublish");
-    if (publish) publish.addEventListener("click", function(){
-      if (state.menuDirty) { state.menuError = "Save your changes first."; render(); return; }
-      api("/api/v1/menu/publish", { method: "POST", body: JSON.stringify({ published: !state.menu.published }) })
-        .then(function(d){ state.menu = d; state.menuError = null; showToast(d.published ? "Menu ordering is on" : "Menu ordering is off"); render(); })
-        .catch(function(err){ state.menuError = err.message; render(); });
-    });
-    var importBtn = document.getElementById("egMenuImport");
-    if (importBtn) importBtn.addEventListener("click", function(){
-      if ((draft.items || []).length && !confirm("Replace the dishes below with what's read from your documents? Nothing is saved until you click Save menu.")) return;
-      state.menuImporting = true;
-      render();
-      api("/api/v1/menu/import", { method: "POST", body: JSON.stringify({}) })
-        .then(function(d){
-          state.menuDraft = d.definition;
-          state.menuDirty = true;
-          state.menuError = null;
-          showToast("Menu read - check the dishes and prices, then Save menu");
-        })
-        .catch(function(err){ state.menuError = err.message; })
-        .then(function(){ state.menuImporting = false; render(); });
-    });
-  }
-
   // ---- Instant Demo ----
   function demoHtml(){
     var hasAssistant = state.assistants ? state.assistants.length > 0 : false;
@@ -5190,8 +5026,6 @@
       bindKnowledge: bindKnowledge,
       renderCaptureTile: renderCaptureTile,
       clientDashboardHtml: clientDashboardHtml,
-      menuHtml: menuHtml,
-      bindMenu: bindMenu,
       navItems: navItems,
       leadsHtml: leadsHtml,
       contactDrawerHtml: contactDrawerHtml,
