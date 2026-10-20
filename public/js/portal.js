@@ -2668,6 +2668,8 @@
   ];
   // Must match VOICE_AUDIENCES in the backend's app/voice_settings.py. ""
   // saves as not chosen, which is US English.
+  var ASSISTANT_VOICE_OPTIONS = [["en-US", "US English (default)"], ["en-IN", "Indian English"], ["en-GB", "UK English"], ["en-AU", "Australian English"]];
+  var SPEECH_MODEL_OPTIONS = [["default", "Standard (default)"], ["phone_call", "Phone call (enhanced)"]];
   var VOICE_AUDIENCE_OPTIONS = [
     ["", "US English (default)"], ["en-IN", "Indian English"], ["en-GB", "UK English"], ["en-AU", "Australian English"]
   ];
@@ -2701,15 +2703,31 @@
         return '<option value="' + o[0] + '"' + ((s.voice_audience || "") === o[0] ? " selected" : "") + '>' + esc(o[1]) + '</option>';
       }).join("") + '</select>';
 
+    var isHindi = (s.voice_audience || "") === "hi-IN";
+    var voiceSelect = '<select class="eg-select" id="egVoiceAssistantVoice" style="max-width:280px"' + (isHindi ? " disabled" : "") + '>' +
+      ASSISTANT_VOICE_OPTIONS.map(function(o){
+        return '<option value="' + o[0] + '"' + ((s.voice_assistant_voice || "en-US") === o[0] ? " selected" : "") + '>' + esc(o[1]) + '</option>';
+      }).join("") + '</select>';
+    var modelSelect = '<select class="eg-select" id="egVoiceSpeechModel" style="max-width:280px">' +
+      SPEECH_MODEL_OPTIONS.map(function(o){
+        return '<option value="' + o[0] + '"' + ((s.voice_speech_model || "default") === o[0] ? " selected" : "") + '>' + esc(o[1]) + '</option>';
+      }).join("") + '</select>';
+
     return '<div class="eg-card" style="margin-bottom:14px">' +
       '<div class="eg-row"><h3>Voice AI Call Settings</h3><button class="eg-btn ghost small" id="egVoiceSettingsToggle">Close</button></div>' +
       '<div class="eg-form-row"><label>Who mostly calls you?</label>' + audienceSelect +
-      '<div class="eg-small eg-muted" style="margin-top:4px">Tunes how the assistant hears callers and the voice it speaks with. Pick the accent most of your callers have; everyone can still call.</div></div>' +
+      '<div class="eg-small eg-muted" style="margin-top:4px">Tunes how the assistant hears callers. Pick the accent most of your callers have; everyone can still call.</div></div>' +
+      '<div class="eg-form-row"><label>Assistant&rsquo;s voice</label>' + voiceSelect +
+      '<div class="eg-small eg-muted" style="margin-top:4px">' + (isHindi ? 'Hindi calls are answered in Hindi, with a Hindi voice.' : 'How the assistant sounds, whatever accent your callers have.') + '</div></div>' +
+      '<div class="eg-form-row"><label>Speech recognition</label>' + modelSelect +
+      '<div class="eg-small eg-muted" style="margin-top:4px">&ldquo;Phone call (enhanced)&rdquo; is tuned for phone audio. Try it with a few test calls before leaving it on.</div></div>' +
       '<div class="eg-form-row"><label>Words callers often say <span class="eg-small eg-muted">(dish names and other words the assistant might mishear, separated by commas)</span></label>' +
       '<textarea class="eg-textarea" id="egVoiceSpeechHints" placeholder="Butter Naan, Malai Kofta, Gulab Jamun">' + esc(s.voice_speech_hints || "") + '</textarea>' +
+      '<div class="eg-small eg-muted" style="margin-top:4px">' +
       (state.tenantSelf && state.tenantSelf.business_type === "restaurant"
-        ? '<div class="eg-small eg-muted" style="margin-top:4px">Dish names from the menu you upload on the Knowledge page are added automatically - list only other words here.</div>'
-        : '') + '</div>' +
+        ? 'Dish names from the menu you upload on the Knowledge page are added automatically - list only other words here.'
+        : 'Names read from the documents you upload on the Knowledge page (services, brands and so on) are added automatically - list only other words here.') +
+      '</div></div>' +
       '<div class="eg-form-row"><label>Callers book</label>' +
       '<select class="eg-select" id="egBookingKind" style="max-width:280px">' +
       '<option value="appointment"' + (s.booking_kind !== "reservation" ? " selected" : "") + '>Appointments (checked against your calendar)</option>' +
@@ -2772,6 +2790,8 @@
         after_hours_message: document.getElementById("egVoiceAfterHoursMsg").value,
         emergency_message: document.getElementById("egVoiceEmergencyMsg").value,
         voice_audience: document.getElementById("egVoiceAudience").value,
+        voice_assistant_voice: document.getElementById("egVoiceAssistantVoice").value,
+        voice_speech_model: document.getElementById("egVoiceSpeechModel").value,
         voice_speech_hints: document.getElementById("egVoiceSpeechHints").value,
         booking_kind: document.getElementById("egBookingKind").value,
         bookings_need_approval: document.getElementById("egBookingsNeedApproval").checked,
@@ -4237,6 +4257,7 @@
           '<td style="width:150px"><input class="eg-input" data-bt-field="' + ri + ':' + qi + '" value="' + esc(q.field) + '"' + (isCore ? ' readonly style="background:#f7f9fc"' : '') + ' /></td>' +
           '<td><input class="eg-input" data-bt-ask="' + ri + ':' + qi + '" value="' + esc(q.ask) + '" />' +
           (q.only_if ? '<div class="eg-small eg-muted">Asked only when ' + esc(Object.keys(q.only_if).map(function(k){ return k + " is " + q.only_if[k]; }).join(", ")) + '</div>' : '') + '</td>' +
+          '<td style="width:190px">' + btAnswerHtml(q, ri + ':' + qi) + '</td>' +
           '<td style="white-space:nowrap"><label class="eg-small"><input type="checkbox" data-bt-req="' + ri + ':' + qi + '"' + (q.required ? ' checked' : '') + (isCore ? ' disabled' : '') + ' /> Required</label></td>' +
           '<td style="white-space:nowrap">' +
           '<button class="eg-btn ghost small" data-bt-move="' + ri + ':' + qi + ':-1"' + (qi === 0 ? ' disabled' : '') + ' aria-label="Move up">&uarr;</button> ' +
@@ -4249,7 +4270,7 @@
         '<span class="eg-small eg-muted" style="margin-left:auto">' + req.questions.length + ' / ' + max + ' questions</span>' +
         (draft.requests.length > 1 ? ' <button class="eg-btn ghost small" data-bt-del-request="' + ri + '">Remove ' + esc(d.request_types[req.type].toLowerCase()) + 's</button>' : '') + '</div>' +
         '<div class="eg-small eg-muted" style="margin:4px 0 8px">Always asked: ' + esc(locked.join(", ")) + '. The assistant only asks what the customer hasn&rsquo;t already said.</div>' +
-        '<table class="eg-table"><thead><tr><th>Field</th><th>Question</th><th></th><th></th></tr></thead><tbody>' + rows + '</tbody></table>' +
+        '<table class="eg-table"><thead><tr><th>Field</th><th>Question</th><th>Answer</th><th></th><th></th></tr></thead><tbody>' + rows + '</tbody></table>' +
         (req.questions.length < max ? '<button class="eg-btn ghost small" data-bt-add="' + ri + '" style="margin-top:8px">+ Add question</button>' : '') +
         '</div>';
     }).join("");
@@ -4274,6 +4295,8 @@
       '<option value="appointment"' + (draft.defaults.booking_kind !== "reservation" ? " selected" : "") + '>Appointments (checked against the calendar)</option>' +
       '<option value="reservation"' + (draft.defaults.booking_kind === "reservation" ? " selected" : "") + '>Table reservations (party size and time)</option></select></div>' +
       '<label class="eg-small" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="egBtApproval"' + (draft.defaults.bookings_need_approval ? " checked" : "") + ' /> Staff approve bookings before they&rsquo;re confirmed (default for new clients of this type)</label>' +
+      '<div class="eg-form-row" style="margin-top:10px"><label>What to listen for <span class="eg-small eg-muted">(read from each client&rsquo;s uploads, so calls hear these words and match what callers ask for)</span></label>' +
+      '<input class="eg-input" id="egBtListenFor" maxlength="200" value="' + esc(draft.listen_for || "") + '" placeholder="Leave blank for this type&rsquo;s default, e.g. the services offered and the brands named" /></div>' +
       '</div>' +
       requestsHtml +
       (addable.length ? '<div style="margin-top:10px"><select class="eg-select" id="egBtAddKind" style="width:auto">' +
@@ -4290,6 +4313,21 @@
       '<div class="eg-card" style="margin-top:12px"><h3>History</h3><table class="eg-table"><tbody>' + versionsHtml + '</tbody></table></div>';
   }
 
+  // What kind of answer a question expects, so a plain reply ("pickup",
+  // "7 pm", "medium") is filled in at once instead of going to the model.
+  // "Default" uses the field's usual kind (a name, a day, a time...).
+  var BT_ANSWER_KINDS = [["", "Default"], ["text", "Short text"], ["choice", "One of a list"], ["yes_no", "Yes or no"],
+    ["number", "A number"], ["time", "A time"], ["date", "A day"], ["address", "An address"], ["name", "A name"]];
+  function btAnswerHtml(q, at){
+    var select = '<select class="eg-select" data-bt-answer="' + at + '">' + BT_ANSWER_KINDS.map(function(k){
+      return '<option value="' + k[0] + '"' + ((q.answer || "") === k[0] ? " selected" : "") + '>' + k[1] + '</option>';
+    }).join("") + '</select>';
+    var options = (q.answer === "choice" || (q.options && q.options.length))
+      ? '<input class="eg-input" style="margin-top:4px" data-bt-options="' + at + '" value="' + esc((q.options || []).join(", ")) + '" placeholder="mild, medium, hot" />'
+      : '';
+    return select + options;
+  }
+
   // Reads every field on the editor back into the draft, so adding,
   // removing or moving a row never loses what was typed.
   function collectBtDraft(){
@@ -4301,6 +4339,19 @@
     if (kind) draft.defaults.booking_kind = kind.value;
     var approval = document.getElementById("egBtApproval");
     if (approval) draft.defaults.bookings_need_approval = approval.checked;
+    var listenFor = document.getElementById("egBtListenFor");
+    if (listenFor) { if (listenFor.value.trim()) draft.listen_for = listenFor.value.trim(); else delete draft.listen_for; }
+    document.querySelectorAll("[data-bt-answer]").forEach(function(el){
+      var p = el.getAttribute("data-bt-answer").split(":");
+      var q = draft.requests[+p[0]].questions[+p[1]];
+      if (el.value) q.answer = el.value; else delete q.answer;
+    });
+    document.querySelectorAll("[data-bt-options]").forEach(function(el){
+      var p = el.getAttribute("data-bt-options").split(":");
+      var q = draft.requests[+p[0]].questions[+p[1]];
+      var opts = el.value.split(",").map(function(o){ return o.trim(); }).filter(Boolean);
+      if (opts.length) q.options = opts; else delete q.options;
+    });
     document.querySelectorAll("[data-bt-field]").forEach(function(el){
       var p = el.getAttribute("data-bt-field").split(":");
       draft.requests[+p[0]].questions[+p[1]].field = el.value.trim();
@@ -4322,6 +4373,9 @@
   }
 
   function bindBusinessTypeEdit(){
+    document.querySelectorAll("[data-bt-answer]").forEach(function(el){
+      el.addEventListener("change", function(){ collectBtDraft(); render(); });
+    });
     var back = document.getElementById("egBtBack");
     if (back) back.addEventListener("click", function(){ state.view = "businessTypes"; ensureBusinessTypes(); render(); });
     var draft = state.btDraft;
@@ -5019,6 +5073,7 @@
       businessTypesHtml: businessTypesHtml,
       businessTypeEditHtml: businessTypeEditHtml,
       bindBusinessTypeEdit: bindBusinessTypeEdit,
+      collectBtDraft: collectBtDraft,
       myQuestionsHtml: myQuestionsHtml,
       bindMyQuestions: bindMyQuestions,
       tenantDetailHtml: tenantDetailHtml,

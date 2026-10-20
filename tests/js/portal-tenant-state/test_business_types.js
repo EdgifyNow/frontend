@@ -96,6 +96,31 @@ test("in the editor, required questions are locked and the rest can be added, mo
   assert(hooks.state.btDraft.requests[0].questions[0].ask === "Which treatment are you booking?", "what was typed is kept when the list changes");
 });
 
+test("each question's answer kind and what to listen for are editable", async () => {
+  const { win, hooks } = buildPage();
+  hooks.state.view = "businessTypeEdit";
+  hooks.state.btEditKey = "salon";
+  hooks.state.btDetail = detail();
+  hooks.state.btDraft = JSON.parse(JSON.stringify(SALON));
+  const doc = win.document;
+  // Only the test's own copy of the editor on the page (render() also draws one into #egApp).
+  const mount = () => { doc.getElementById("egApp").innerHTML = ""; doc.getElementById("egTest").innerHTML = hooks.businessTypeEditHtml(); hooks.bindBusinessTypeEdit(); };
+  mount();
+  const answer = doc.querySelector('[data-bt-answer="0:3"]');
+  assert(answer && answer.value === "", "starts on the field's default");
+  answer.value = "choice";
+  answer.dispatchEvent(new win.Event("change"));
+  mount();
+  const options = doc.querySelector('[data-bt-options="0:3"]');
+  assert(options, "a choice question asks for its answers");
+  options.value = "Asha, Ravi, no preference";
+  doc.getElementById("egBtListenFor").value = "the services offered and the stylists' names";
+  hooks.collectBtDraft();
+  const q = hooks.state.btDraft.requests[0].questions[3];
+  assert(q.answer === "choice" && q.options.join("|") === "Asha|Ravi|no preference", "the answer kind and its answers are kept");
+  assert(hooks.state.btDraft.listen_for === "the services offered and the stylists' names", "what to listen for is kept");
+});
+
 test("saving sends the whole template; a refused edit shows why and keeps the draft", async () => {
   let refuse = true;
   const { win, hooks, calls } = buildPage((url, opts) => (opts && opts.method === "PUT")

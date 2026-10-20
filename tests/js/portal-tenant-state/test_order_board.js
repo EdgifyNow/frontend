@@ -185,6 +185,34 @@ test("the caller audience and speech words are saved with the voice settings", a
   const body = put && JSON.parse(put.opts.body);
   assert(body && body.voice_audience === "en-GB", "the chosen audience is sent");
   assert(body && body.voice_speech_hints === "Butter Naan, Gulab Jamun", "the speech words are sent");
+  assert(body && body.voice_assistant_voice === "en-US", "the assistant's voice is its own setting, US English unless chosen");
+  assert(body && body.voice_speech_model === "default", "the phone speech model is off unless chosen");
+});
+
+test("the assistant's voice and speech recognition are set apart from who calls", async () => {
+  const { win, hooks, fetchCalls, setFetchHandler } = buildPage();
+  hooks.state.voiceSettingsOpen = true;
+  hooks.state.voiceSettings = {
+    welcome_message: "Hi", is_welcome_message_default: true, human_handoff_number_masked: null,
+    transfer_message: "Hold", is_transfer_message_default: true, ring_timeout_seconds: 20,
+    no_answer_message: "Sorry", is_no_answer_message_default: true, timezone: "America/New_York",
+    business_hours: null, after_hours_message: "Closed", is_after_hours_message_default: true,
+    emergency_message: "", is_emergency_message_default: true, voice_audience: "en-IN",
+    voice_assistant_voice: "en-US", voice_speech_model: "default", voice_speech_hints: ""
+  };
+  win.document.getElementById("egTest").innerHTML = hooks.voiceSettingsPanelHtml();
+  hooks.bindVoiceSettingsPanel();
+  setFetchHandler(() => jsonResponse(hooks.state.voiceSettings));
+  assert(win.document.getElementById("egVoiceAssistantVoice").value === "en-US", "Indian English callers, US English voice");
+  win.document.getElementById("egVoiceSpeechModel").value = "phone_call";
+  win.document.getElementById("egVoiceSettingsSave").click();
+  await new Promise((r) => setTimeout(r, 0));
+  const body = JSON.parse(fetchCalls.find((c) => c.opts && c.opts.method === "PUT").opts.body);
+  assert(body.voice_audience === "en-IN" && body.voice_assistant_voice === "en-US" && body.voice_speech_model === "phone_call", "each sent on its own");
+
+  hooks.state.voiceSettings.voice_audience = "hi-IN";
+  win.document.getElementById("egTest").innerHTML = hooks.voiceSettingsPanelHtml();
+  assert(win.document.getElementById("egVoiceAssistantVoice").disabled, "Hindi calls always use the Hindi voice");
 });
 
 test("a reservation waiting for staff has its own section, party size, time, and Approve/Reject", () => {
