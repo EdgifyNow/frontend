@@ -187,6 +187,7 @@ test("the caller audience and speech words are saved with the voice settings", a
   assert(body && body.voice_speech_hints === "Butter Naan, Gulab Jamun", "the speech words are sent");
   assert(body && body.voice_assistant_voice === "en-US", "the assistant's voice is its own setting, US English unless chosen");
   assert(body && body.voice_speech_model === "default", "the phone speech model is off unless chosen");
+  assert(body && body.takes_delivery === false, "delivery orders are off unless switched on");
 });
 
 test("the assistant's voice and speech recognition are set apart from who calls", async () => {

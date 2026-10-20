@@ -43,6 +43,16 @@ win.document.getElementById("egTest").innerHTML = hooks.renderCaptureTile(unpric
 text = win.document.getElementById("egTest").textContent;
 assert(/Chicken Biryani/.test(text) && !/Total/.test(text), "no price on the menu, no total shown");
 
+const noted = Object.assign({ id: "o3", details: { fulfillment: "pickup", order_time: "7 pm", spice_level: "medium",
+  special_requests: "no onions, nut allergy", currency: "$", total: "18.99",
+  lines: [{ name: "Chicken Makhni", quantity: 1, unit_price: "18.99", line_total: "18.99" }] } }, base);
+win.document.getElementById("egTest").innerHTML = hooks.renderCaptureTile(noted, cfg);
+assert(win.document.querySelector("[data-order-spice]").textContent.includes("medium"), "the spice level for the kitchen");
+assert(win.document.querySelector("[data-order-requests]").textContent.includes("nut allergy"), "allergies and special requests stand out");
+const plainNo = Object.assign({ id: "o4", details: Object.assign({}, noted.details, { special_requests: "No." }) }, base);
+win.document.getElementById("egTest").innerHTML = hooks.renderCaptureTile(plainNo, cfg);
+assert(!win.document.querySelector("[data-order-requests]"), "a plain 'no' to special requests isn't shown as a note");
+
 hooks.state.tenantSelf = { business_type: "restaurant" };
 assert(typeof hooks.menuHtml === "undefined", "there is no Menu page");
 

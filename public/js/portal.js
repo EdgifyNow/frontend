@@ -2205,6 +2205,18 @@
       '</div>';
   }
 
+  // What the kitchen needs besides the dishes: the spice level and any
+  // allergies or special requests the caller gave.
+  function orderNotesHtml(details){
+    var notes = [];
+    if (details.spice_level) notes.push('<div class="eg-small" data-order-spice><b>Spice:</b> ' + esc(formatDetailValue(details.spice_level)) + '</div>');
+    var requests = details.special_requests;
+    if (requests && !/^\s*(no|none|nothing|no thanks?|nope|nah)\b\.?\s*$/i.test(String(requests))) {
+      notes.push('<div class="eg-small" data-order-requests style="color:var(--red)"><b>Note:</b> ' + esc(formatDetailValue(requests)) + '</div>');
+    }
+    return notes.length ? '<div style="margin-top:6px">' + notes.join("") + '</div>' : '';
+  }
+
   function renderOrderTile(v, cfg){
     var details = v.details || {};
     var lines = orderLineItems(details);
@@ -2225,6 +2237,7 @@
         : (lines.length
           ? '<ul class="eg-order-lines">' + lines.map(function(l){ return orderLineHtml(l, details.heard_as); }).join("") + '</ul>'
           : '<div class="eg-vtile-headline">' + esc(v.summary) + '</div>')) +
+      orderNotesHtml(details) +
       orderFlagsHtml(v.flags) + textStatusHtml(v) + cardFootHtml(v, true) +
       requestActionsHtml(v, cfg) +
       '</div>';
@@ -2735,6 +2748,8 @@
       '</select></div>' +
       '<div class="eg-form-row"><label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="egBookingsNeedApproval"' + (s.bookings_need_approval ? " checked" : "") + ' />Staff approve bookings before they\'re confirmed</label>' +
       '<div class="eg-small eg-muted" style="margin-top:4px">On: a booking made by phone or WhatsApp waits on this page for Approve or Reject, and only then goes on the calendar. Off: it\'s booked straight away. Orders and table reservations always wait for approval. Customers who agree to texts are texted the decision.</div></div>' +
+      '<div class="eg-form-row"><label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="egTakesDelivery"' + (s.takes_delivery ? " checked" : "") + ' />We take delivery orders</label>' +
+      '<div class="eg-small eg-muted" style="margin-top:4px">Off: every phone and WhatsApp order is for pickup - the assistant doesn\'t ask pickup or delivery, or for an address, and tells callers who ask for delivery that orders are pickup only.</div></div>' +
       '<div class="eg-form-row"><label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="egCustomerTextsEnabled"' + (s.customer_texts_enabled !== false ? " checked" : "") + ' />Text customers when their request is approved or rejected</label>' +
       '<div class="eg-small eg-muted" style="margin-top:4px">Off: callers are never asked about or promised a text, and each approved or rejected request tells you to call the customer instead.</div>' +
       (s.customer_texts_enabled !== false && s.texts_available === false
@@ -2795,7 +2810,8 @@
         voice_speech_hints: document.getElementById("egVoiceSpeechHints").value,
         booking_kind: document.getElementById("egBookingKind").value,
         bookings_need_approval: document.getElementById("egBookingsNeedApproval").checked,
-        customer_texts_enabled: document.getElementById("egCustomerTextsEnabled").checked
+        customer_texts_enabled: document.getElementById("egCustomerTextsEnabled").checked,
+        takes_delivery: document.getElementById("egTakesDelivery").checked
       };
       // Blank means "leave it as it is" here, not "clear it" - unlike the
       // message fields, an empty Human Handoff Number field is far more
@@ -3618,7 +3634,7 @@
     }
     return knowledgeCheckHtml(state.knowledgeCheck, true) +
       '<div class="eg-card" style="margin-top:16px">' +
-      '<div class="eg-row"><h3>Documents</h3><label class="eg-btn" style="cursor:pointer">Upload document<input type="file" id="egFileInput" accept=".pdf,.doc,.docx" style="display:none" /></label></div>' +
+      '<div class="eg-row"><h3>Documents</h3><label class="eg-btn" style="cursor:pointer">Upload document<input type="file" id="egFileInput" accept=".pdf,.docx,.txt" style="display:none" /></label></div>' +
       body +
       pager +
       '<div id="egUploadStatus" class="eg-small eg-muted" style="margin-top:10px"></div>' +
@@ -4635,7 +4651,7 @@
       '<div class="eg-card">' +
       '<h3>Upload a document</h3>' +
       '<label class="eg-dropzone" style="display:block;cursor:pointer"><div style="font-size:30px">&#8679;</div><b>Click to upload a PDF or DOCX</b><div class="eg-small eg-muted" style="margin-top:6px">This creates a real document in your knowledge base</div>' +
-      '<input type="file" id="egDemoFile" accept=".pdf,.doc,.docx" style="display:none" /></label>' +
+      '<input type="file" id="egDemoFile" accept=".pdf,.docx,.txt" style="display:none" /></label>' +
       uploadStatusHtml +
       '</div>' +
       '<div class="eg-card eg-chat">' +
