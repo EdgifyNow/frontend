@@ -2103,13 +2103,23 @@
     return { text: Math.floor(minutes / 60) + " h " + (minutes % 60) + " min ago", minutes: minutes };
   }
 
+  // "20:30" -> "8:30 PM", "19:00" -> "7 PM"; anything else as given.
+  function spokenClock(text){
+    return text.replace(/\b([01]?\d|2[0-3]):([0-5]\d)\b(?!\s*(?:[ap]\.?\s?m\b))(?:\s*hours?)?/gi, function(_m, h, m){
+      var hour = parseInt(h, 10), minute = parseInt(m, 10);
+      return (hour % 12 || 12) + (minute ? ":" + m : "") + " " + (hour < 12 ? "AM" : "PM");
+    });
+  }
+
   function orderFulfillmentHtml(details){
     var kind = details && details.fulfillment;
     var when = details && details.order_time;
     if (kind !== "pickup" && kind !== "delivery") {
       return '<div class="eg-order-fulfil"><span>Pickup or delivery not given &mdash; check the transcript</span></div>';
     }
-    var whenText = when ? (when === "as soon as possible" ? "ASAP" : when) : "time not given";
+    var whenText = when
+      ? (when === "as soon as possible" ? "ASAP" + (details.ready_in ? " (ready in about " + details.ready_in + ")" : "") : spokenClock(String(when)))
+      : "time not given";
     return '<div class="eg-order-fulfil">' + (kind === "pickup" ? "Pickup" : "Delivery") + ' &middot; ' + esc(whenText) + '</div>' +
       (kind === "delivery"
         ? '<div class="eg-small" style="margin-top:2px">' + esc(details.delivery_address || "No address given") + '</div>'
@@ -2556,7 +2566,7 @@
     quantity: "Quantity", notes: "Notes", heard_as: "Heard as", delivery_address: "Delivery address"
   };
   var DETAIL_HIDDEN = ["question", "answer", "answered", "fulfillment", "order_time", "lines", "total", "currency",
-    "done", "action", "appointment_id", "old_start_at", "appointment_start_at", "said"];
+    "done", "action", "appointment_id", "old_start_at", "appointment_start_at", "said", "ready_in"];
 
   function drawerDetailsHtml(d){
     var details = d.details || {};
@@ -2750,6 +2760,8 @@
       '<div class="eg-small eg-muted" style="margin-top:4px">On: a booking made by phone or WhatsApp waits on this page for Approve or Reject, and only then goes on the calendar. Off: it\'s booked straight away. Orders and table reservations always wait for approval. Customers who agree to texts are texted the decision.</div></div>' +
       '<div class="eg-form-row"><label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="egTakesDelivery"' + (s.takes_delivery ? " checked" : "") + ' />We take delivery orders</label>' +
       '<div class="eg-small eg-muted" style="margin-top:4px">Off: every phone and WhatsApp order is for pickup - the assistant doesn\'t ask pickup or delivery, or for an address, and tells callers who ask for delivery that orders are pickup only.</div></div>' +
+      '<div class="eg-form-row"><label>Orders are ready in about</label><input class="eg-input" id="egOrderReadyTime" maxlength="40" style="max-width:280px" placeholder="20 to 25 minutes" value="' + esc(s.order_ready_time || "") + '" />' +
+      '<div class="eg-small eg-muted" style="margin-top:4px">The assistant tells callers their order will be ready in about this long, instead of asking what time they\'d like it. Leave empty to ask for a time.</div></div>' +
       '<div class="eg-form-row"><label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="egCustomerTextsEnabled"' + (s.customer_texts_enabled !== false ? " checked" : "") + ' />Text customers when their request is approved or rejected</label>' +
       '<div class="eg-small eg-muted" style="margin-top:4px">Off: callers are never asked about or promised a text, and each approved or rejected request tells you to call the customer instead.</div>' +
       (s.customer_texts_enabled !== false && s.texts_available === false
@@ -2811,7 +2823,8 @@
         booking_kind: document.getElementById("egBookingKind").value,
         bookings_need_approval: document.getElementById("egBookingsNeedApproval").checked,
         customer_texts_enabled: document.getElementById("egCustomerTextsEnabled").checked,
-        takes_delivery: document.getElementById("egTakesDelivery").checked
+        takes_delivery: document.getElementById("egTakesDelivery").checked,
+        order_ready_time: document.getElementById("egOrderReadyTime").value
       };
       // Blank means "leave it as it is" here, not "clear it" - unlike the
       // message fields, an empty Human Handoff Number field is far more

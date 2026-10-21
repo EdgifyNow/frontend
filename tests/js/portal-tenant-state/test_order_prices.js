@@ -53,6 +53,17 @@ const plainNo = Object.assign({ id: "o4", details: Object.assign({}, noted.detai
 win.document.getElementById("egTest").innerHTML = hooks.renderCaptureTile(plainNo, cfg);
 assert(!win.document.querySelector("[data-order-requests]"), "a plain 'no' to special requests isn't shown as a note");
 
+const clock = Object.assign({ id: "o5", details: Object.assign({}, priced.details, { order_time: "20:30" }) }, base);
+win.document.getElementById("egTest").innerHTML = hooks.renderCaptureTile(clock, cfg);
+text = win.document.getElementById("egTest").textContent;
+assert(/Pickup · 8:30 PM/.test(text) && !/20:30/.test(text), "a 24-hour time shows as 8:30 PM");
+
+const ready = Object.assign({ id: "o6", details: Object.assign({}, priced.details, { order_time: "as soon as possible", ready_in: "20 to 25 minutes" }) }, base);
+win.document.getElementById("egTest").innerHTML = hooks.renderCaptureTile(ready, cfg);
+text = win.document.getElementById("egTest").textContent;
+assert(/ASAP \(ready in about 20 to 25 minutes\)/.test(text), "the ready time the caller was told");
+assert(!/Ready in:/i.test(text), "the ready time isn't listed again as a detail");
+
 hooks.state.tenantSelf = { business_type: "restaurant" };
 assert(typeof hooks.menuHtml === "undefined", "there is no Menu page");
 
