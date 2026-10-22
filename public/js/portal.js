@@ -2111,6 +2111,22 @@
     });
   }
 
+  // Standard calls (included) or Premium (Twilio ConversationRelay): chosen
+  // per business, switched back at any time - the next call uses it.
+  function callModeHtml(s){
+    var mode = s.voice_call_mode === "relay" ? "relay" : "standard";
+    return '<div class="eg-form-row"><label>Call experience</label>' +
+      '<select class="eg-select" id="egVoiceCallMode" style="max-width:420px">' +
+      '<option value="standard"' + (mode === "standard" ? " selected" : "") + '>Standard (included)</option>' +
+      '<option value="relay"' + (mode === "relay" ? " selected" : "") + '>Premium: more natural voice, callers can interrupt (extra cost per minute)</option>' +
+      '</select>' +
+      '<div class="eg-small eg-muted" style="margin-top:4px">Premium uses Twilio ConversationRelay: better hearing of accents, a more natural voice, and the assistant stops talking when the caller speaks. It adds about $0.07 per call minute. Switch back any time; the next call uses it.</div>' +
+      (mode === "relay" && s.relay_available === false
+        ? '<div class="eg-small" style="margin-top:4px;color:var(--red)">Premium calls are turned off for the whole platform right now, so calls use Standard.</div>'
+        : '') +
+      '</div>';
+  }
+
   function orderFulfillmentHtml(details){
     var kind = details && details.fulfillment;
     var when = details && details.order_time;
@@ -2738,6 +2754,7 @@
 
     return '<div class="eg-card" style="margin-bottom:14px">' +
       '<div class="eg-row"><h3>Voice AI Call Settings</h3><button class="eg-btn ghost small" id="egVoiceSettingsToggle">Close</button></div>' +
+      callModeHtml(s) +
       '<div class="eg-form-row"><label>Who mostly calls you?</label>' + audienceSelect +
       '<div class="eg-small eg-muted" style="margin-top:4px">Tunes how the assistant hears callers. Pick the accent most of your callers have; everyone can still call.</div></div>' +
       '<div class="eg-form-row"><label>Assistant&rsquo;s voice</label>' + voiceSelect +
@@ -2819,6 +2836,7 @@
         voice_audience: document.getElementById("egVoiceAudience").value,
         voice_assistant_voice: document.getElementById("egVoiceAssistantVoice").value,
         voice_speech_model: document.getElementById("egVoiceSpeechModel").value,
+        voice_call_mode: document.getElementById("egVoiceCallMode").value,
         voice_speech_hints: document.getElementById("egVoiceSpeechHints").value,
         booking_kind: document.getElementById("egBookingKind").value,
         bookings_need_approval: document.getElementById("egBookingsNeedApproval").checked,
@@ -5074,6 +5092,7 @@
   // loads, which production and normal browser use never do.
   if (typeof window !== "undefined" && window.__EXPOSE_PORTAL_TEST_HOOKS__) {
     window.__portalTestHooks = {
+      callModeHtml: callModeHtml,
       launchWhatsappEmbeddedSignup: launchWhatsappEmbeddedSignup,
       completeWhatsappEmbeddedSignup: completeWhatsappEmbeddedSignup,
       loadWhatsappConnection: loadWhatsappConnection,
