@@ -37,11 +37,6 @@ assert(!/turned off for the whole platform/.test(box.textContent), "no warning w
 box.innerHTML = hooks.callModeHtml({ voice_call_mode: "relay", relay_available: false });
 assert(/turned off for the whole platform/.test(box.textContent), "told when Premium is off for the platform");
 
-box.innerHTML = hooks.callModeHtml({ voice_call_mode: "relay", voice_relay_interrupt: "dtmf", relay_available: true });
-assert(win.document.getElementById("egVoiceRelayInterrupt").value === "dtmf", "a business can make interruptions keypad-only");
-box.innerHTML = hooks.callModeHtml({ voice_call_mode: "relay", relay_available: true });
-assert(win.document.getElementById("egVoiceRelayInterrupt").value === "clear", "clear speech or a key by default");
-assert(win.document.getElementById("egVoiceRelayInterrupt").options.length === 3, "clear speech, any sound, or keypad only");
 
 console.log("\n" + (failures ? failures + " FAILED" : "all passed"));
 process.exit(failures ? 1 : 0);

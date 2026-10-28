@@ -1722,7 +1722,7 @@
   // a page reload.
   var CHANNEL_ACTIVE_STATUSES = ["new", "in_progress", "ready"];
   var CHANNEL_REFRESH_MS = 7000;
-  var CHANNEL_TYPE_COLOR = { order: "red", reservation: "purple", catering: "amber", quote: "amber", appointment: "purple", appointment_change: "purple", lead: "green", general_inquiry: "blue" };
+  var CHANNEL_TYPE_COLOR = { follow_up: "red", order: "red", reservation: "purple", catering: "amber", quote: "amber", appointment: "purple", appointment_change: "purple", lead: "green", general_inquiry: "blue" };
   var CHANNEL_TYPE_ICON = { order: "&#128722;", reservation: "&#127860;", catering: "&#127869;", quote: "&#128221;", appointment: "&#128197;", appointment_change: "&#128260;", lead: "&#128100;", general_inquiry: "&#128172;" };
   var CHANNEL_TYPE_OPTIONS = ["order", "reservation", "catering", "quote", "appointment", "appointment_change", "lead", "general_inquiry"];
   // A new order is waiting on staff: the caller was told it was "sent to
@@ -1851,7 +1851,7 @@
   // doesn't sit unseen when nobody is looking at the board. Only for ones
   // created in the last few minutes, so changing a filter that reveals
   // older ones never sets it off.
-  var ARRIVAL_ALERT_TYPES = ["order", "catering", "quote", "reservation", "appointment", "appointment_change"];
+  var ARRIVAL_ALERT_TYPES = ["follow_up", "order", "catering", "quote", "reservation", "appointment", "appointment_change"];
   var ARRIVAL_RECENT_MS = 10 * 60 * 1000;
   var ARRIVAL_HIGHLIGHT_MS = 60 * 1000;
   var BASE_TITLE = document.title;
@@ -2016,6 +2016,7 @@
     var appts = captures.filter(function(v){ return v.capture_type === "appointment"; }).sort(byNewest);
     var changes = captures.filter(function(v){ return v.capture_type === "appointment_change"; }).sort(byNewest);
     var inquiries = captures.filter(function(v){ return v.capture_type === "general_inquiry" || v.capture_type === "lead"; }).sort(byNewest);
+    var followUps = captures.filter(function(v){ return v.capture_type === "follow_up"; }).sort(byNewest);
 
     var orderGroupOrder = ["new", "in_progress", "ready", "completed", "cancelled"];
     var ordersHtml = orderGroupOrder.map(function(st){
@@ -2033,6 +2034,8 @@
     };
 
     var sections = "";
+    var openFollowUps = followUps.filter(function(v){ return v.status !== "completed" && v.status !== "cancelled"; });
+    if (followUps.length) sections += sectionHtml("Needs follow-up", openFollowUps.length ? "Calls to pick up - call them back" : "All handled", followUps.length, '<div class="eg-tilegrid">' + followUps.map(function(v){ return renderCaptureTile(v, cfg); }).join("") + '</div>');
     if (orders.length) sections += sectionHtml("Orders", "Approve → In Progress → Ready", orders.length, ordersHtml);
     if (reservations.length) sections += sectionHtml("Reservations", "Approve → Confirmed", reservations.length, '<div class="eg-tilegrid">' + reservations.map(function(v){ return renderCaptureTile(v, cfg); }).join("") + '</div>');
     if (catering.length) sections += sectionHtml("Catering requests", "Call back to discuss", catering.length, '<div class="eg-tilegrid">' + catering.map(function(v){ return renderCaptureTile(v, cfg); }).join("") + '</div>');
@@ -2120,18 +2123,11 @@
       '<option value="standard"' + (mode === "standard" ? " selected" : "") + '>Standard (included)</option>' +
       '<option value="relay"' + (mode === "relay" ? " selected" : "") + '>Premium: more natural voice, callers can interrupt (extra cost per minute)</option>' +
       '</select>' +
-      '<div class="eg-small eg-muted" style="margin-top:4px">Premium uses Twilio ConversationRelay: better hearing of accents, a more natural voice, and the assistant stops talking when the caller speaks. It adds about $0.07 per call minute. Switch back any time; the next call uses it.</div>' +
+      '<div class="eg-small eg-muted" style="margin-top:4px">Premium uses Twilio ConversationRelay: better hearing of accents, a more natural voice, and the assistant stops talking when the caller clearly speaks (background noise and &ldquo;mm-hmm&rdquo;s don&rsquo;t stop it). It adds about $0.07 per call minute. Switch back any time; the next call uses it.</div>' +
       (mode === "relay" && s.relay_available === false
         ? '<div class="eg-small" style="margin-top:4px;color:var(--red)">Premium calls are turned off for the whole platform right now, so calls use Standard.</div>'
         : '') +
-      '</div>' +
-      '<div class="eg-form-row"><label>On Premium calls, callers can interrupt the assistant</label>' +
-      '<select class="eg-select" id="egVoiceRelayInterrupt" style="max-width:420px">' +
-      [["clear", "With clear speech or a key (recommended)"], ["any", "With any sound"], ["dtmf", "Only by pressing a key"]].map(function(o){
-        return '<option value="' + o[0] + '"' + ((s.voice_relay_interrupt || "clear") === o[0] ? " selected" : "") + '>' + o[1] + '</option>';
-      }).join("") +
-      '</select>' +
-      '<div class="eg-small eg-muted" style="margin-top:4px">&ldquo;Clear speech&rdquo; ignores background noise, music and short &ldquo;mm-hmm&rdquo;s. &ldquo;Any sound&rdquo; stops the assistant at the slightest noise. &ldquo;Only by pressing a key&rdquo; never lets speech cut it off.</div></div>';
+      '</div>';
   }
 
   function orderFulfillmentHtml(details){
@@ -2398,6 +2394,40 @@
   // ---- Question card: what was asked, what the assistant said, and
   // whether it could answer at all - an unanswered one needs a person, and
   // points at something missing from the knowledge base.
+  // ---- "Needs follow-up": a call that went wrong, or ended mid-request -
+  // what they were doing, what was captured, and a number to call back.
+  var FOLLOW_UP_SKIP = ["ended", "reason", "request_type", "request_label", "request_summary", "lines", "total", "currency",
+    "texted", "text_error", "texted_at", "customer_replied", "replied_at", "heard_as", "ready_in", "order_time", "fulfillment"];
+  function followUpCapturedHtml(d){
+    var rows = Object.keys(d).filter(function(k){ return FOLLOW_UP_SKIP.indexOf(k) === -1 && d[k] !== null && d[k] !== ""; }).map(function(k){
+      return '<div class="eg-small"><b>' + esc(DETAIL_LABELS[k] || k.replace(/_/g, " ")) + ':</b> ' + esc(formatDetailValue(d[k])) + '</div>';
+    }).join("");
+    return (d.lines && d.lines.length ? menuOrderLinesHtml(d) : "") + rows;
+  }
+
+  function renderFollowUpTile(v, cfg){
+    var d = v.details || {};
+    var done = v.status === "completed" || v.status === "cancelled";
+    var ended = { hung_up: "Call ended mid-request", trouble: "The assistant couldn&rsquo;t help", not_answered: "No one answered the transfer" }[d.ended] || "Needs follow-up";
+    var phone = (v.contact && v.contact.phone) || "";
+    var textLine = "";
+    if (d.customer_replied === "yes") textLine = '<div class="eg-text-status bad">&#9742; Replied YES to the text &mdash; they want a call back</div>';
+    else if (d.texted === "sent") textLine = '<div class="eg-small eg-muted">Texted: &ldquo;we got disconnected&rdquo; (no reply yet)</div>';
+    else if (d.texted === "failed") textLine = '<div class="eg-small eg-muted">The &ldquo;we got disconnected&rdquo; text didn&rsquo;t go out' + (d.text_error ? ': ' + esc(d.text_error) : '') + '</div>';
+    return '<div class="eg-vtile red' + (!done ? ' needs-action' : '') + (isNewArrival(v.id) ? ' is-new-arrival' : '') + '" data-follow-up' + tileOpenAttrs(v, cfg) + '>' +
+      '<div class="eg-vtile-top"><div class="eg-order-ref">&#9742; FOLLOW UP</div><span class="eg-pill red">' + ended + '</span></div>' +
+      cardWhoHtml(v) +
+      '<div class="eg-vtile-headline">' + esc(v.summary) + '</div>' +
+      (d.request_label ? '<div class="eg-small" style="margin-top:4px"><b>Was putting together:</b> a ' + esc(d.request_label) + '</div>' : '') +
+      followUpCapturedHtml(d) +
+      textLine +
+      cardFootHtml(v) +
+      (done ? '' : '<div class="eg-vtile-actions">' +
+        (phone ? '<a class="eg-btn small" href="tel:' + esc(phone) + '">Call back</a>' : '') +
+        '<button class="eg-btn small ghost" data-channel-action="' + cfg.key + '" data-channel-action-id="' + esc(v.id) + '" data-channel-action-status="completed">Mark handled</button></div>') +
+      '</div>';
+  }
+
   function renderQueryTile(v, cfg){
     var d = v.details || {};
     var unanswered = d.answered === false;
@@ -2442,6 +2472,7 @@
   }
 
   function renderCaptureTile(v, cfg){
+    if (v.capture_type === "follow_up") return renderFollowUpTile(v, cfg);
     if (v.capture_type === "appointment_change") return renderChangeTile(v, cfg);
     if (v.capture_type === "order") return renderOrderTile(v, cfg);
     if (v.capture_type === "appointment") return renderAppointmentTile(v, cfg);
@@ -2844,7 +2875,6 @@
         voice_assistant_voice: document.getElementById("egVoiceAssistantVoice").value,
         voice_speech_model: document.getElementById("egVoiceSpeechModel").value,
         voice_call_mode: document.getElementById("egVoiceCallMode").value,
-        voice_relay_interrupt: document.getElementById("egVoiceRelayInterrupt").value,
         voice_speech_hints: document.getElementById("egVoiceSpeechHints").value,
         booking_kind: document.getElementById("egBookingKind").value,
         bookings_need_approval: document.getElementById("egBookingsNeedApproval").checked,
@@ -5101,6 +5131,7 @@
   if (typeof window !== "undefined" && window.__EXPOSE_PORTAL_TEST_HOOKS__) {
     window.__portalTestHooks = {
       callModeHtml: callModeHtml,
+      renderFollowUpTile: renderFollowUpTile,
       launchWhatsappEmbeddedSignup: launchWhatsappEmbeddedSignup,
       completeWhatsappEmbeddedSignup: completeWhatsappEmbeddedSignup,
       loadWhatsappConnection: loadWhatsappConnection,
