@@ -2124,7 +2124,14 @@
       (mode === "relay" && s.relay_available === false
         ? '<div class="eg-small" style="margin-top:4px;color:var(--red)">Premium calls are turned off for the whole platform right now, so calls use Standard.</div>'
         : '') +
-      '</div>';
+      '</div>' +
+      '<div class="eg-form-row"><label>On Premium calls, callers can interrupt the assistant</label>' +
+      '<select class="eg-select" id="egVoiceRelayInterrupt" style="max-width:420px">' +
+      [["clear", "With clear speech or a key (recommended)"], ["any", "With any sound"], ["dtmf", "Only by pressing a key"]].map(function(o){
+        return '<option value="' + o[0] + '"' + ((s.voice_relay_interrupt || "clear") === o[0] ? " selected" : "") + '>' + o[1] + '</option>';
+      }).join("") +
+      '</select>' +
+      '<div class="eg-small eg-muted" style="margin-top:4px">&ldquo;Clear speech&rdquo; ignores background noise, music and short &ldquo;mm-hmm&rdquo;s. &ldquo;Any sound&rdquo; stops the assistant at the slightest noise. &ldquo;Only by pressing a key&rdquo; never lets speech cut it off.</div></div>';
   }
 
   function orderFulfillmentHtml(details){
@@ -2837,6 +2844,7 @@
         voice_assistant_voice: document.getElementById("egVoiceAssistantVoice").value,
         voice_speech_model: document.getElementById("egVoiceSpeechModel").value,
         voice_call_mode: document.getElementById("egVoiceCallMode").value,
+        voice_relay_interrupt: document.getElementById("egVoiceRelayInterrupt").value,
         voice_speech_hints: document.getElementById("egVoiceSpeechHints").value,
         booking_kind: document.getElementById("egBookingKind").value,
         bookings_need_approval: document.getElementById("egBookingsNeedApproval").checked,
