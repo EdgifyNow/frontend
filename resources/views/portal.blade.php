@@ -123,6 +123,16 @@ a{text-decoration:none;color:inherit}
    each card lightly tinted by type, and a stronger tint on cards that need
    someone to act (awaiting approval, needs scheduling, couldn't answer). */
 .eg-activity-section{background:#f4f6fa}
+.eg-calls{display:flex;flex-direction:column;gap:4px}
+.eg-call{background:#fff;border:1px solid #e3e7ef;border-radius:8px}
+.eg-call-row{display:grid;grid-template-columns:110px minmax(120px,1.2fr) 60px 3fr;gap:10px;align-items:center;padding:8px 12px;cursor:pointer;font-size:13px}
+.eg-call-row:hover,.eg-call.open .eg-call-row{background:#f7f9fc}
+.eg-call-when{font-weight:600;white-space:nowrap}
+.eg-call-who,.eg-call-outcome{overflow:hidden;text-overflow:ellipsis}
+.eg-call-transcript{padding:8px 12px 12px;border-top:1px solid #e3e7ef;font-size:13px;max-height:360px;overflow:auto}
+.eg-call-line{padding:3px 0}
+.eg-call-line.note{color:#5b6475;font-style:italic}
+@media (max-width:640px){.eg-call-row{grid-template-columns:1fr auto}.eg-call-outcome{grid-column:1 / -1}}
 .eg-activity-section .eg-vtile{background:#fff}
 .eg-activity-section .eg-vtile.red{background:#fffaf8}
 .eg-activity-section .eg-vtile.purple{background:#fbf9ff}

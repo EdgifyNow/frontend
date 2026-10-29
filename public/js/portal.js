@@ -107,6 +107,12 @@
     smsActivity: null,
     smsActivityOpen: false,
     voiceCaptures: null,
+    // Every call (the Calls list): newest first, the one opened and its
+    // transcript, and whether the whole list is shown.
+    voiceCalls: null,
+    voiceCallsOpen: null,
+    voiceCallsDetail: null,
+    voiceCallsAll: false,
     voiceSearch: "",
     voiceStatusFilter: "active",
     voiceTypeFilter: "all",
@@ -1769,7 +1775,7 @@
       captures: "voiceCaptures", search: "voiceSearch", statusFilter: "voiceStatusFilter",
       typeFilter: "voiceTypeFilter", sinceFilter: "voiceSinceFilter", hideTest: "voiceHideTest",
       drawerId: "voiceDrawerId", drawerDetail: "voiceDrawerDetail",
-      idPrefix: "egVoice", contactLabel: "Caller",
+      idPrefix: "egVoice", contactLabel: "Caller", calls: "voiceCalls",
       emptyMessage: "No voice activity yet. Once your assistant takes a call, captured orders, appointments, and leads will show up here.",
       showTranscript: true
     },
@@ -1838,12 +1844,111 @@
     if (state[cfg.search]) params.set("search", state[cfg.search]);
     if (state[cfg.hideTest]) params.set("is_test", "false");
     var silent = opts && opts.silent;
+    if (cfg.calls) loadCalls(cfg, sinceIso, silent);
     api("/api/v1/crm/voice-captures?" + params.toString()).then(function(d){
       state[cfg.captures] = d;
       state[cfg.key + "LastUpdated"] = new Date();
       noteNewArrivals(cfg, d);
       if (silent) { preserveFocus(render); } else { render(); }
     }).catch(function(err){ if (!silent) showToast(err.message, true); });
+  }
+
+  // ---- Calls: every call, so none is lost - including the ones that left no
+  // request card (a question answered, a transfer someone picked up, a caller
+  // who hung up). Time, caller, duration and how it went; the transcript on
+  // click. Same period, search and "hide my tests" as the board.
+  function loadCalls(cfg, sinceIso, silent){
+    var params = new URLSearchParams();
+    if (sinceIso) params.set("since", sinceIso);
+    if (state[cfg.search]) params.set("search", state[cfg.search]);
+    if (state[cfg.hideTest]) params.set("is_test", "false");
+    params.set("limit", "200");
+    api("/api/v1/crm/calls?" + params.toString()).then(function(d){
+      state[cfg.calls] = d;
+      var open = state[cfg.calls + "Open"] ? d.filter(function(c){ return c.id === state[cfg.calls + "Open"]; })[0] : null;
+      if (open && open.status === "in_progress") { loadCallDetail(cfg, open.id); return; }
+      if (silent) { preserveFocus(render); } else { render(); }
+    }).catch(function(err){ if (!silent) showToast(err.message, true); });
+  }
+
+  function loadCallDetail(cfg, callId){
+    api("/api/v1/crm/calls/" + callId).then(function(d){
+      if (state[cfg.calls + "Open"] !== callId) return;
+      state[cfg.calls + "Detail"] = d;
+      preserveFocus(render);
+    }).catch(function(err){ showToast(err.message, true); });
+  }
+
+  var CALLS_SHOWN = 8;
+
+  function callWhenText(iso){
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return "";
+    var time = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+    var today = new Date();
+    if (d.toDateString() === today.toDateString()) return time;
+    var yesterday = new Date(today.getTime() - 86400000);
+    if (d.toDateString() === yesterday.toDateString()) return "Yesterday " + time;
+    return d.toLocaleDateString("en-US", { month: "short", day: "numeric" }) + ", " + time;
+  }
+
+  function callLengthText(seconds){
+    seconds = Math.max(0, Math.round(seconds || 0));
+    if (seconds < 60) return seconds + "s";
+    var m = Math.floor(seconds / 60), s = seconds % 60;
+    return m + "m" + (s ? " " + s + "s" : "");
+  }
+
+  function callTranscriptHtml(cfg, call){
+    var detail = state[cfg.calls + "Detail"];
+    if (!detail || detail.id !== call.id) return '<div class="eg-call-transcript eg-small eg-muted">Loading...</div>';
+    var lines = (detail.transcript || []).map(function(line){
+      if (line.who === "note") return '<div class="eg-call-line note">' + esc(line.text) + '</div>';
+      return '<div class="eg-call-line"><b>' + (line.who === "caller" ? "Caller" : "Assistant") + ':</b> ' + esc(line.text) + '</div>';
+    }).join("");
+    var cards = (detail.requests || []).map(function(r){
+      return '<button class="eg-btn small ghost" data-channel-drawer="' + cfg.key + '" data-channel-drawer-id="' + esc(r.id) + '">Open the ' +
+        esc(channelTypeLabel(r.capture_type).toLowerCase()) + ' card</button>';
+    }).join("");
+    return '<div class="eg-call-transcript">' +
+      (lines || '<div class="eg-small eg-muted">Nothing was said on this call.</div>') +
+      (cards ? '<div class="eg-vtile-actions">' + cards + '</div>' : '') +
+      '</div>';
+  }
+
+  function callRowHtml(cfg, call){
+    var who = call.contact ? (call.contact.name || formatPhone(call.contact.phone) || "Unknown caller") : "Unknown caller";
+    var number = call.contact && call.contact.name ? formatPhone(call.contact.phone) : "";
+    var pill = call.status === "in_progress" ? '<span class="eg-pill green">Live</span>'
+      : call.transfer === "answered" ? '<span class="eg-pill green">Picked up</span>'
+      : call.transfer === "not_answered" ? '<span class="eg-pill red">Not picked up</span>' : '';
+    var isOpen = state[cfg.calls + "Open"] === call.id;
+    return '<div class="eg-call' + (isOpen ? ' open' : '') + '">' +
+      '<div class="eg-call-row" data-call-id="' + esc(call.id) + '" tabindex="0" role="button" aria-expanded="' + (isOpen ? 'true' : 'false') + '">' +
+      '<span class="eg-call-when">' + esc(callWhenText(call.started_at)) + '</span>' +
+      '<span class="eg-call-who">' + esc(who) + (number ? ' <span class="eg-muted">' + esc(number) + '</span>' : '') + '</span>' +
+      '<span class="eg-call-len eg-muted">' + esc(callLengthText(call.duration_seconds)) + '</span>' +
+      '<span class="eg-call-outcome">' + esc(call.outcome) + ' ' + pill + '</span>' +
+      '</div>' +
+      (isOpen ? callTranscriptHtml(cfg, call) : '') +
+      '</div>';
+  }
+
+  function callsSectionHtml(cfg){
+    var calls = state[cfg.calls];
+    if (!cfg.calls || calls === null || calls === undefined) return "";
+    var all = state[cfg.calls + "All"];
+    var shown = all ? calls : calls.slice(0, CALLS_SHOWN);
+    var body = calls.length
+      ? '<div class="eg-calls">' + shown.map(function(c){ return callRowHtml(cfg, c); }).join("") + '</div>' +
+        (calls.length > CALLS_SHOWN
+          ? '<button class="eg-btn small ghost" data-calls-all="' + cfg.key + '" style="margin-top:8px">' + (all ? 'Show fewer' : 'Show all ' + calls.length + ' calls') + '</button>'
+          : '')
+      : '<div class="eg-small eg-muted">No calls in this period.</div>';
+    return '<div class="eg-card eg-activity-section" style="margin-bottom:14px">' +
+      '<div class="eg-cardhead"><h3 style="margin:0">Calls <span class="eg-small eg-muted" style="font-weight:500">(' + calls.length + ')</span></h3>' +
+      '<span class="eg-small eg-muted" style="margin-left:auto">Every call - click one for what was said</span></div>' +
+      body + '</div>';
   }
 
   // ---- New order alert: a chime, the tile highlighted for a minute, and a
@@ -1989,6 +2094,7 @@
       liveIndicator +
       '</div>';
 
+    filters += callsSectionHtml(cfg);
     var allCaptures = state[cfg.captures];
     if (allCaptures === null) return filters + '<div class="eg-small eg-muted">Loading...</div>';
     // "Active" is filtered client side (see CHANNEL_ACTIVE_STATUSES) so a
@@ -1998,7 +2104,9 @@
     var captures = state[cfg.statusFilter] === "active"
       ? allCaptures.filter(function(v){ return CHANNEL_ACTIVE_STATUSES.indexOf(v.status) !== -1; })
       : allCaptures;
-    if (!captures.length) return filters + '<div class="eg-card"><div class="eg-small eg-muted">' + esc(cfg.emptyMessage) + '</div></div>';
+    var hasCalls = cfg.calls && (state[cfg.calls] || []).length;
+    if (!captures.length) return filters + '<div class="eg-card"><div class="eg-small eg-muted">' +
+      esc(hasCalls ? "No requests in this view - every call is listed above." : cfg.emptyMessage) + '</div></div>';
 
     // Split into the three purpose-built sections instead of one
     // undifferentiated grid: orders move through a status workflow so they
@@ -2609,6 +2717,29 @@
         if (e.target !== el || (e.key !== "Enter" && e.key !== " ")) return;
         e.preventDefault();
         openChannelDrawer(cfg, el.getAttribute("data-channel-drawer-id"));
+      });
+    });
+    // A call opens (and closes) in place, with its transcript.
+    document.querySelectorAll("[data-call-id]").forEach(function(el){
+      var toggle = function(){
+        var callId = el.getAttribute("data-call-id");
+        var opening = state[cfg.calls + "Open"] !== callId;
+        state[cfg.calls + "Open"] = opening ? callId : null;
+        state[cfg.calls + "Detail"] = null;
+        preserveFocus(render);
+        if (opening) loadCallDetail(cfg, callId);
+      };
+      el.addEventListener("click", function(e){ e.stopPropagation(); toggle(); });
+      el.addEventListener("keydown", function(e){
+        if (e.target !== el || (e.key !== "Enter" && e.key !== " ")) return;
+        e.preventDefault();
+        toggle();
+      });
+    });
+    document.querySelectorAll('[data-calls-all="' + cfg.key + '"]').forEach(function(el){
+      el.addEventListener("click", function(){
+        state[cfg.calls + "All"] = !state[cfg.calls + "All"];
+        preserveFocus(render);
       });
     });
     // After a card's action, refresh the board and, if this request's
@@ -5236,6 +5367,7 @@
     window.__portalTestHooks = {
       callModeHtml: callModeHtml,
       confirmLoopHtml: confirmLoopHtml,
+      callsSectionHtml: callsSectionHtml,
       businessSettingsHtml: businessSettingsHtml,
       guidanceRulesHtml: guidanceRulesHtml,
       renderFollowUpTile: renderFollowUpTile,
