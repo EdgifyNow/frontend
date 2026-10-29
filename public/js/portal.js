@@ -2408,7 +2408,8 @@
   function renderFollowUpTile(v, cfg){
     var d = v.details || {};
     var done = v.status === "completed" || v.status === "cancelled";
-    var ended = { hung_up: "Call ended mid-request", trouble: "The assistant couldn&rsquo;t help", not_answered: "No one answered the transfer" }[d.ended] || "Needs follow-up";
+    var ended = { hung_up: "Call ended mid-request", trouble: "The assistant couldn&rsquo;t help", not_answered: "No one answered the transfer",
+      callback_requested: "Asked for a call back" }[d.ended] || "Needs follow-up";
     var phone = (v.contact && v.contact.phone) || "";
     var textLine = "";
     if (d.customer_replied === "yes") textLine = '<div class="eg-text-status bad">&#9742; Replied YES to the text &mdash; they want a call back</div>';
@@ -2482,7 +2483,10 @@
     var badgeColor = CHANNEL_STATUS_BADGE[v.status] || "navy";
     // A catering request is like an inquiry: nothing to run through stages,
     // the owner calls back and marks it handled.
-    var isInquiry = v.capture_type === "general_inquiry" || v.capture_type === "catering" || v.capture_type === "quote";
+    // Only orders run Start / Ready / Done (renderOrderTile): any other request
+    // here - a lead, a callback, a quote, catering - is called back and marked
+    // handled, for every kind of business.
+    var isInquiry = true;
     var nextStatus = CHANNEL_NEXT_STATUS[v.status];
     var isDone = v.status === "completed" || v.status === "cancelled";
 
@@ -2490,7 +2494,8 @@
     if (isInquiry) {
       if (!isDone) {
         actionsHtml = '<div class="eg-vtile-actions">' +
-          '<button class="eg-btn small ghost" data-channel-action="' + cfg.key + '" data-channel-action-id="' + esc(v.id) + '" data-channel-action-status="completed">' + (v.capture_type === "catering" || v.capture_type === "quote" ? "Mark handled" : "Dismiss") + '</button>' +
+          (v.contact && v.contact.phone ? '<a class="eg-btn small" href="tel:' + esc(v.contact.phone) + '">Call back</a>' : '') +
+          '<button class="eg-btn small ghost" data-channel-action="' + cfg.key + '" data-channel-action-id="' + esc(v.id) + '" data-channel-action-status="completed">Mark handled</button>' +
           '</div>';
       }
     } else if (!isDone) {
@@ -2620,7 +2625,8 @@
     quantity: "Quantity", notes: "Notes", heard_as: "Heard as", delivery_address: "Delivery address"
   };
   var DETAIL_HIDDEN = ["question", "answer", "answered", "fulfillment", "order_time", "lines", "total", "currency",
-    "done", "action", "appointment_id", "old_start_at", "appointment_start_at", "said", "ready_in"];
+    "done", "action", "appointment_id", "old_start_at", "appointment_start_at", "said", "ready_in",
+    "ended", "request_type", "request_label", "request_summary", "texted", "text_error", "texted_at", "customer_replied", "replied_at"];
 
   function drawerDetailsHtml(d){
     var details = d.details || {};
@@ -2802,21 +2808,11 @@
       '<div class="eg-form-row"><label>Words callers often say <span class="eg-small eg-muted">(dish names and other words the assistant might mishear, separated by commas)</span></label>' +
       '<textarea class="eg-textarea" id="egVoiceSpeechHints" placeholder="Butter Naan, Malai Kofta, Gulab Jamun">' + esc(s.voice_speech_hints || "") + '</textarea>' +
       '<div class="eg-small eg-muted" style="margin-top:4px">' +
-      (state.tenantSelf && state.tenantSelf.business_type === "restaurant"
-        ? 'Dish names from the menu you upload on the Knowledge page are added automatically - list only other words here.'
+      (state.voiceSettings && state.voiceSettings.capabilities && state.voiceSettings.capabilities.takes_orders
+        ? 'Item names from the menu or price list you upload on the Knowledge page are added automatically - list only other words here.'
         : 'Names read from the documents you upload on the Knowledge page (services, brands and so on) are added automatically - list only other words here.') +
       '</div></div>' +
-      '<div class="eg-form-row"><label>Callers book</label>' +
-      '<select class="eg-select" id="egBookingKind" style="max-width:280px">' +
-      '<option value="appointment"' + (s.booking_kind !== "reservation" ? " selected" : "") + '>Appointments (checked against your calendar)</option>' +
-      '<option value="reservation"' + (s.booking_kind === "reservation" ? " selected" : "") + '>Table reservations (party size and time)</option>' +
-      '</select></div>' +
-      '<div class="eg-form-row"><label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="egBookingsNeedApproval"' + (s.bookings_need_approval ? " checked" : "") + ' />Staff approve bookings before they\'re confirmed</label>' +
-      '<div class="eg-small eg-muted" style="margin-top:4px">On: a booking made by phone or WhatsApp waits on this page for Approve or Reject, and only then goes on the calendar. Off: it\'s booked straight away. Orders and table reservations always wait for approval. Customers who agree to texts are texted the decision.</div></div>' +
-      '<div class="eg-form-row"><label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="egTakesDelivery"' + (s.takes_delivery ? " checked" : "") + ' />We take delivery orders</label>' +
-      '<div class="eg-small eg-muted" style="margin-top:4px">Off: every phone and WhatsApp order is for pickup - the assistant doesn\'t ask pickup or delivery, or for an address, and tells callers who ask for delivery that orders are pickup only.</div></div>' +
-      '<div class="eg-form-row"><label>Orders are ready in about</label><input class="eg-input" id="egOrderReadyTime" maxlength="40" style="max-width:280px" placeholder="20 to 25 minutes" value="' + esc(s.order_ready_time || "") + '" />' +
-      '<div class="eg-small eg-muted" style="margin-top:4px">The assistant tells callers their order will be ready in about this long, instead of asking what time they\'d like it. Leave empty to ask for a time.</div></div>' +
+      businessSettingsHtml(s) +
       '<div class="eg-form-row"><label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="egCustomerTextsEnabled"' + (s.customer_texts_enabled !== false ? " checked" : "") + ' />Text customers when their request is approved or rejected</label>' +
       '<div class="eg-small eg-muted" style="margin-top:4px">Off: callers are never asked about or promised a text, and each approved or rejected request tells you to call the customer instead.</div>' +
       (s.customer_texts_enabled !== false && s.texts_available === false
@@ -2841,6 +2837,52 @@
       '<button class="eg-btn ghost" id="egVoiceSettingsTestHandoff">Test Human Handoff</button>' +
       '</div>' +
       '</div>';
+  }
+
+  // The settings that apply to this business, from what its business type
+  // does (capabilities from the API): a salon never sees delivery orders, a
+  // bakery never sees "ready in about 20 minutes". Without capabilities (an
+  // older API) everything is shown, as before.
+  // What the business's guidance switched on, enforced on every reply on
+  // every channel (understood_rules from the API); tone and style shape the
+  // assistant's own answers.
+  function guidanceRulesHtml(assistant){
+    var rules = (assistant && assistant.understood_rules) || [];
+    return '<div class="eg-small eg-muted" style="margin-top:6px" data-guidance-rules>' +
+      (rules.length ? rules.map(function(r){ return '<span class="eg-pill green" style="margin-right:6px">&#10003; ' + esc(r) + '</span>'; }).join("") + '<br>' : '') +
+      'Rules about what not to share (prices, phone numbers, emails) are applied to every reply, by phone and in chat. ' +
+      'Tone and style (&ldquo;be warm&rdquo;, &ldquo;keep it short&rdquo;) shape the assistant&rsquo;s own answers; quick replies like order read-backs keep their plain, friendly wording. ' +
+      'Safety rules for your kind of business (for example no medical or legal advice) always apply.</div>';
+  }
+
+  function businessSettingsHtml(s){
+    var caps = s.capabilities || null;
+    var show = function(key){ return !caps || !!caps[key]; };
+    var html = "";
+    if (show("reservations")) {
+      html +=
+        '<div class="eg-form-row"><label>Callers book</label>' +
+        '<select class="eg-select" id="egBookingKind" style="max-width:280px">' +
+        '<option value="appointment"' + (s.booking_kind !== "reservation" ? " selected" : "") + '>Appointments (checked against your calendar)</option>' +
+        '<option value="reservation"' + (s.booking_kind === "reservation" ? " selected" : "") + '>Table reservations (party size and time)</option>' +
+        '</select></div>';
+    }
+    if (show("bookings")) {
+      html +=
+        '<div class="eg-form-row"><label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="egBookingsNeedApproval"' + (s.bookings_need_approval ? " checked" : "") + ' />Staff approve bookings before they\'re confirmed</label>' +
+        '<div class="eg-small eg-muted" style="margin-top:4px">On: a booking made by phone or WhatsApp waits on this page for Approve or Reject, and only then goes on the calendar. Off: it\'s booked straight away. Orders and table reservations always wait for approval. Customers who agree to texts are texted the decision.</div></div>';
+    }
+    if (show("takes_orders")) {
+      html +=
+        '<div class="eg-form-row"><label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="egTakesDelivery"' + (s.takes_delivery ? " checked" : "") + ' />We take delivery orders</label>' +
+        '<div class="eg-small eg-muted" style="margin-top:4px">Off: every phone and WhatsApp order is for pickup - the assistant doesn\'t ask pickup or delivery, or for an address, and tells callers who ask for delivery that orders are pickup only.</div></div>';
+    }
+    if (show("same_day_orders")) {
+      html +=
+        '<div class="eg-form-row"><label>Orders are ready in about</label><input class="eg-input" id="egOrderReadyTime" maxlength="40" style="max-width:280px" placeholder="20 to 25 minutes" value="' + esc(s.order_ready_time || "") + '" />' +
+        '<div class="eg-small eg-muted" style="margin-top:4px">The assistant tells callers their order will be ready in about this long, instead of asking what time they\'d like it. Leave empty to ask for a time.</div></div>';
+    }
+    return html;
   }
 
   function bindVoiceSettingsPanel(){
@@ -2876,12 +2918,14 @@
         voice_speech_model: document.getElementById("egVoiceSpeechModel").value,
         voice_call_mode: document.getElementById("egVoiceCallMode").value,
         voice_speech_hints: document.getElementById("egVoiceSpeechHints").value,
-        booking_kind: document.getElementById("egBookingKind").value,
-        bookings_need_approval: document.getElementById("egBookingsNeedApproval").checked,
-        customer_texts_enabled: document.getElementById("egCustomerTextsEnabled").checked,
-        takes_delivery: document.getElementById("egTakesDelivery").checked,
-        order_ready_time: document.getElementById("egOrderReadyTime").value
+        customer_texts_enabled: document.getElementById("egCustomerTextsEnabled").checked
       };
+      // Only the settings this business is shown (businessSettingsHtml).
+      var shown = function(id){ return document.getElementById(id); };
+      if (shown("egBookingKind")) body.booking_kind = shown("egBookingKind").value;
+      if (shown("egBookingsNeedApproval")) body.bookings_need_approval = shown("egBookingsNeedApproval").checked;
+      if (shown("egTakesDelivery")) body.takes_delivery = shown("egTakesDelivery").checked;
+      if (shown("egOrderReadyTime")) body.order_ready_time = shown("egOrderReadyTime").value;
       // Blank means "leave it as it is" here, not "clear it" - unlike the
       // message fields, an empty Human Handoff Number field is far more
       // likely to be someone who just didn't touch it than someone
@@ -3805,7 +3849,8 @@
     if (current) {
       configHtml = '<div class="eg-card">' +
         '<div class="eg-row"><h3>' + esc(current.name) + '</h3><span class="eg-pill' + (current.is_active ? ' green' : '') + '">' + (current.is_active ? "Active" : "Inactive") + '</span></div>' +
-        '<div class="eg-form-row"><label>System instructions</label><textarea class="eg-textarea" id="egAssistantPrompt">' + esc(current.system_prompt || "") + '</textarea></div>' +
+        '<div class="eg-form-row"><label>System instructions</label><textarea class="eg-textarea" id="egAssistantPrompt">' + esc(current.system_prompt || "") + '</textarea>' +
+        guidanceRulesHtml(current) + '</div>' +
         '<div style="display:flex;gap:10px"><button class="eg-btn" id="egSaveAssistant">Save changes</button>' +
         '<button class="eg-btn ' + (current.is_active ? 'ghost' : 'secondary') + '" id="egToggleActive">' + (current.is_active ? "Deactivate" : "Activate") + '</button></div>' +
         '</div>';
@@ -5131,6 +5176,8 @@
   if (typeof window !== "undefined" && window.__EXPOSE_PORTAL_TEST_HOOKS__) {
     window.__portalTestHooks = {
       callModeHtml: callModeHtml,
+      businessSettingsHtml: businessSettingsHtml,
+      guidanceRulesHtml: guidanceRulesHtml,
       renderFollowUpTile: renderFollowUpTile,
       launchWhatsappEmbeddedSignup: launchWhatsappEmbeddedSignup,
       completeWhatsappEmbeddedSignup: completeWhatsappEmbeddedSignup,
