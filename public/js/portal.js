@@ -2300,7 +2300,54 @@
       (v.contact.name && phone ? '<div class="eg-vtile-phone">' + esc(phone) + '</div>' : '');
   }
   function cardFootHtml(v, withoutAge){
-    return '<div class="eg-vtile-meta"><span>' + esc(channelWord(v)) + (withoutAge ? '' : ' &middot; ' + esc(orderAge(v.created_at).text)) + '</span></div>';
+    return confirmLoopHtml(v) +
+      '<div class="eg-vtile-meta"><span>' + esc(channelWord(v)) + (withoutAge ? '' : ' &middot; ' + esc(orderAge(v.created_at).text)) + '</span></div>';
+  }
+
+  // ---- Closing the loop when the customer can't be reached: each call that
+  // wasn't picked up, a text asking them to confirm (YES / NO / call us back),
+  // and their reply - shown on the card itself, so an order or booking never
+  // confirmed doesn't become a ghost. For any request a customer makes.
+  var CONFIRMABLE = ["order", "reservation", "appointment", "service_visit", "quote", "catering", "lead", "follow_up"];
+  var GHOST_AFTER_MINUTES = 180;
+
+  function clockOf(iso){
+    var d = new Date(iso);
+    return isNaN(d.getTime()) ? "" : d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  }
+
+  function confirmStatusHtml(v){
+    var d = v.details || {};
+    var confirm = d.confirm || {};
+    var tries = d.call_attempts || [];
+    var tried = tries.length ? "Tried calling " + tries.map(clockOf).join(", ") : "";
+    if (confirm.reply === "yes") return '<div class="eg-text-status ok" data-confirm-state="yes">&#10003; Confirmed by text</div>';
+    if (confirm.reply === "no") return '<div class="eg-text-status bad" data-confirm-state="no">Replied NO by text &mdash; wants to cancel</div>';
+    if (confirm.reply === "call_back") return '<div class="eg-text-status bad" data-confirm-state="call_back">&#9742; Replied asking us to call them back</div>';
+    if (confirm.status === "sent") {
+      var minutes = (Date.now() - new Date(confirm.sent_at).getTime()) / 60000;
+      return minutes > GHOST_AFTER_MINUTES
+        ? '<div class="eg-text-status bad" data-confirm-state="ghost">No reply to the confirmation text &mdash; possibly not a real request' + (tried ? ' &middot; ' + esc(tried) : '') + '</div>'
+        : '<div class="eg-small eg-muted" data-confirm-state="waiting">Asked to confirm by text &mdash; waiting for a reply' + (tried ? ' &middot; ' + esc(tried) : '') + '</div>';
+    }
+    if (confirm.status === "failed") return '<div class="eg-text-status bad" data-confirm-state="failed">The confirmation text didn&rsquo;t go out' + (confirm.error ? ': ' + esc(confirm.error) : '') + ' &mdash; call again</div>';
+    if (confirm.status === "off") return '<div class="eg-text-status bad" data-confirm-state="off">' + esc(confirm.error || "Texts are off - call again") + '</div>';
+    if (tries.length) return '<div class="eg-text-status bad" data-confirm-state="unconfirmed">Not confirmed yet &middot; ' + esc(tried) + '</div>';
+    return "";
+  }
+
+  function confirmLoopHtml(v){
+    if (CONFIRMABLE.indexOf(v.capture_type) === -1) return "";
+    var status = confirmStatusHtml(v);
+    var done = v.status === "completed" || v.status === "cancelled";
+    var replied = ((v.details || {}).confirm || {}).reply;
+    if (done || replied) return status;
+    var canText = v.texts_available !== false;
+    return status +
+      '<div class="eg-vtile-actions" style="margin-top:4px">' +
+      '<button class="eg-btn small ghost" data-reach-id="' + esc(v.id) + '" data-reach-text="' + (canText ? "1" : "") + '">Couldn&rsquo;t reach them' + (canText ? ' &mdash; text them' : '') + '</button>' +
+      (canText ? '' : '<span class="eg-small eg-muted" style="align-self:center">Texts are off &mdash; call again</span>') +
+      '</div>';
   }
   // "Mon, Oct 19 · 2:00 PM" from a stored appointment time. Its digits are
   // the business's own wall clock tagged UTC, so they're read as UTC, never
@@ -2570,6 +2617,18 @@
       loadChannelCaptures(cfg);
       if (state[cfg.drawerId] === captureId) openChannelDrawer(cfg, captureId);
     };
+    // "Couldn't reach them": the attempt is noted and, where the business can
+    // text, the customer is asked to confirm.
+    document.querySelectorAll("[data-reach-id]").forEach(function(el){
+      el.addEventListener("click", function(e){
+        e.stopPropagation();
+        var captureId = el.getAttribute("data-reach-id");
+        el.disabled = true;
+        api("/api/v1/crm/voice-captures/" + captureId + "/call-attempt", { method: "POST", body: { text: !!el.getAttribute("data-reach-text") } })
+          .then(function(){ afterAction(captureId); })
+          .catch(function(err){ showToast(err.message, true); el.disabled = false; });
+      });
+    });
     document.querySelectorAll('[data-channel-action="' + cfg.key + '"]').forEach(function(el){
       el.addEventListener("click", function(e){
         e.stopPropagation();
@@ -5176,6 +5235,7 @@
   if (typeof window !== "undefined" && window.__EXPOSE_PORTAL_TEST_HOOKS__) {
     window.__portalTestHooks = {
       callModeHtml: callModeHtml,
+      confirmLoopHtml: confirmLoopHtml,
       businessSettingsHtml: businessSettingsHtml,
       guidanceRulesHtml: guidanceRulesHtml,
       renderFollowUpTile: renderFollowUpTile,
