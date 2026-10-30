@@ -258,7 +258,7 @@
       '<div class="wg-foot"><form class="wg-form" id="wgChatForm">' +
       '<input class="wg-input" id="wgChatInput" placeholder="Type your question..." autocomplete="off" />' +
       '<button class="wg-send" type="submit" aria-label="Send"><svg width="16" height="16" viewBox="0 0 24 24" fill="#fff"><path d="M2 21l21-9L2 3v7l15 2-15 2v7z"/></svg></button>' +
-      '</form></div>' +
+      '</form><div class="wg-disclaimer">AI assistant &middot; Responses are generated automatically and may be inaccurate. Please confirm important details with the business.</div></div>' +
       '</div>';
 
     bind();

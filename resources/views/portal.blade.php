@@ -123,6 +123,7 @@ a{text-decoration:none;color:inherit}
    each card lightly tinted by type, and a stronger tint on cards that need
    someone to act (awaiting approval, needs scheduling, couldn't answer). */
 .eg-activity-section{background:#f4f6fa}
+.eg-disclaimer{margin:28px 0 8px;padding-top:12px;border-top:1px solid #e3e7ef;font-size:11px;line-height:1.5;color:#8a93a3;max-width:900px}
 .eg-calls{display:flex;flex-direction:column;gap:4px}
 .eg-call{background:#fff;border:1px solid #e3e7ef;border-radius:8px}
 .eg-call-row{display:grid;grid-template-columns:110px minmax(120px,1.2fr) 60px 3fr;gap:10px;align-items:center;padding:8px 12px;cursor:pointer;font-size:13px}

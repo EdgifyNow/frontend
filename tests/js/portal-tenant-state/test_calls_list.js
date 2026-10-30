@@ -74,9 +74,24 @@ hooks.state.voiceCalls = [];
 box.innerHTML = hooks.channelActivityHtml(voice);
 assert(/No calls in this period/.test(box.textContent), "no calls in the period");
 
+// WhatsApp and the website chat: every conversation, the same way.
 hooks.state.whatsappCaptures = [];
+hooks.state.whatsappChats = [call("w1", { outcome: "Asked: “What are your hours?”" })];
 box.innerHTML = hooks.channelActivityHtml(whatsapp);
-assert(!box.querySelector("[data-call-id]") && !/Calls \(/.test(box.textContent), "WhatsApp has no Calls list");
+assert(/Conversations \(1\)/.test(box.textContent) && !/Calls \(/.test(box.textContent), "WhatsApp lists every conversation");
+
+const webchat = hooks.CHANNEL_ACTIVITY.webchat;
+assert(webchat && webchat.key === "web_widget", "a Website Chat board for the web_widget channel");
+hooks.state.webchatCaptures = [];
+hooks.state.webchatChats = [call("v1", { contact: null, outcome: "Asked: “Do you do keratin?”" })];
+hooks.state.webchatChatsOpen = "v1";
+hooks.state.webchatChatsDetail = Object.assign(call("v1", { contact: null }), { transcript: [
+  { who: "caller", text: "Do you do keratin?", at: now }, { who: "team", text: "Yes - Fridays.", at: now }] });
+box.innerHTML = hooks.channelActivityHtml(webchat);
+assert(/Website visitor/.test(box.textContent), "a visitor who gave no details is a Website visitor");
+assert(/Visitor:\s*Do you do keratin\?/.test(box.textContent) && /Your team:\s*Yes - Fridays\./.test(box.textContent), "the chat, visitor and your team");
+assert(/every conversation is listed above/.test(box.textContent), "no requests yet, every conversation listed");
+assert(hooks.navItems().some(function(i){ return i.id === "webchat" && i.label === "Website Chat"; }), "Website Chat in the menu");
 
 console.log("\n" + (failures ? failures + " FAILED" : "all passed"));
 process.exit(failures ? 1 : 0);

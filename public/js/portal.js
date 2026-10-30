@@ -149,7 +149,27 @@
     whatsappHideTest: false,
     whatsappDrawerId: null,
     whatsappDrawerDetail: null,
-    whatsappLastUpdated: null
+    whatsappLastUpdated: null,
+    whatsappChats: null,
+    whatsappChatsOpen: null,
+    whatsappChatsDetail: null,
+    whatsappChatsAll: false,
+    // Website chat: the same board as Voice and WhatsApp, for requests made
+    // in the chat on the business's website, and every chat.
+    webchatCaptures: null,
+    webchatSearch: "",
+    webchatStatusFilter: "active",
+    webchatTypeFilter: "all",
+    webchatSinceFilter: "7d",
+    webchatHideTest: false,
+    webchatDrawerId: null,
+    webchatDrawerDetail: null,
+    web_widgetLastUpdated: null,
+    web_widgetKnownArrivalIds: null,
+    webchatChats: null,
+    webchatChatsOpen: null,
+    webchatChatsDetail: null,
+    webchatChatsAll: false
     };
   }
   var state = initialState();
@@ -691,6 +711,7 @@
     if (v === "integrations") { ensureWidgetKey(); ensureGoogleCalendarStatus(); }
     if (v === "voice") { loadChannelCaptures(CHANNEL_ACTIVITY.voice); startChannelAutoRefresh(CHANNEL_ACTIVITY.voice); }
     else if (v === "whatsapp") { loadWhatsappConnection(); loadChannelCaptures(CHANNEL_ACTIVITY.whatsapp); startChannelAutoRefresh(CHANNEL_ACTIVITY.whatsapp); }
+    else if (v === "webchat") { loadChannelCaptures(CHANNEL_ACTIVITY.webchat); startChannelAutoRefresh(CHANNEL_ACTIVITY.webchat); }
     else stopChannelAutoRefresh();
     render();
   }
@@ -736,6 +757,13 @@
     }
   }
 
+  // Shown in small print under every client page.
+  var PORTAL_DISCLAIMER = "Responses, summaries and requests produced by the EdgifyNow AI assistant are generated " +
+    "automatically from the information your business provides and from what customers say, type or are heard to say. " +
+    "They may occasionally be incomplete, inaccurate or misheard, and do not constitute professional, medical, legal or " +
+    "financial advice. Please review orders, bookings and other requests before confirming them with customers. " +
+    "Customer conversations are processed by third-party AI and communication providers to deliver this service.";
+
   function navItems(){
     if (isAdmin()) {
       return [
@@ -772,6 +800,8 @@
     if (featureVoiceWhatsapp() && state.tenantSelf && state.tenantSelf.whatsapp_enabled) {
       items.splice(3, 0, { id: "whatsapp", label: "WhatsApp Activity", icon: "chat" });
     }
+    // The website chat is every client's channel: its requests and chats.
+    items.splice(3, 0, { id: "webchat", label: "Website Chat", icon: "chat" });
     return items;
   }
 
@@ -810,8 +840,9 @@
       '<div class="eg-user"><div class="eg-avatar">' + esc(initials) + '</div><div><b>' + esc(state.user.email) + '</b><div class="eg-small eg-muted">' + esc(roleLabel) + '</div></div></div>' +
       '</div>' +
       '<div id="egContent"></div>' +
+      (isAdmin() ? '' : '<div class="eg-disclaimer">' + esc(PORTAL_DISCLAIMER) + '</div>') +
       '</main>' +
-      '</div>' + toastHtml + leadDrawerHtml() + contactDrawerHtml() + appointmentDrawerHtml() + newAppointmentDrawerHtml() + voiceDrawerHtml() + whatsappDrawerHtml();
+      '</div>' + toastHtml + leadDrawerHtml() + contactDrawerHtml() + appointmentDrawerHtml() + newAppointmentDrawerHtml() + voiceDrawerHtml() + whatsappDrawerHtml() + channelDrawerHtml(CHANNEL_ACTIVITY.webchat);
 
     document.querySelectorAll("[data-nav]").forEach(function(el){
       el.addEventListener("click", function(){
@@ -844,6 +875,7 @@
     if (state.view === "questions") return "My Questions";
     if (state.view === "voice") return "Voice Activity";
     if (state.view === "whatsapp") return "WhatsApp Activity";
+    if (state.view === "webchat") return "Website Chat";
     return "";
   }
   function viewSub(){
@@ -861,6 +893,7 @@
     if (state.view === "questions") return "What your assistant asks your customers.";
     if (state.view === "voice") return "Live calls, orders, and appointments captured by your voice assistant.";
     if (state.view === "whatsapp") return "Live orders, appointments, and leads captured over WhatsApp.";
+    if (state.view === "webchat") return "Orders, bookings and requests from the chat on your website, and every conversation.";
     return "";
   }
 
@@ -881,6 +914,7 @@
     if (state.view === "questions") { el.innerHTML = myQuestionsHtml(); bindMyQuestions(); return; }
     if (state.view === "voice") { el.innerHTML = voiceHtml(); bindVoice(); return; }
     if (state.view === "whatsapp") { el.innerHTML = whatsappHtml(); bindWhatsapp(); return; }
+    if (state.view === "webchat") { el.innerHTML = channelActivityHtml(CHANNEL_ACTIVITY.webchat); bindChannelActivity(CHANNEL_ACTIVITY.webchat); return; }
   }
 
   // ---- Dashboard ----
@@ -1775,7 +1809,7 @@
       captures: "voiceCaptures", search: "voiceSearch", statusFilter: "voiceStatusFilter",
       typeFilter: "voiceTypeFilter", sinceFilter: "voiceSinceFilter", hideTest: "voiceHideTest",
       drawerId: "voiceDrawerId", drawerDetail: "voiceDrawerDetail",
-      idPrefix: "egVoice", contactLabel: "Caller", calls: "voiceCalls",
+      idPrefix: "egVoice", contactLabel: "Caller", calls: "voiceCalls", callsTitle: "Calls", callsWord: "call",
       emptyMessage: "No voice activity yet. Once your assistant takes a call, captured orders, appointments, and leads will show up here.",
       showTranscript: true
     },
@@ -1784,8 +1818,17 @@
       captures: "whatsappCaptures", search: "whatsappSearch", statusFilter: "whatsappStatusFilter",
       typeFilter: "whatsappTypeFilter", sinceFilter: "whatsappSinceFilter", hideTest: "whatsappHideTest",
       drawerId: "whatsappDrawerId", drawerDetail: "whatsappDrawerDetail",
-      idPrefix: "egWhatsapp", contactLabel: "Contact",
+      idPrefix: "egWhatsapp", contactLabel: "Contact", calls: "whatsappChats", callsTitle: "Conversations", callsWord: "conversation",
       emptyMessage: "No WhatsApp activity yet. Once your assistant captures an order, appointment, or lead over WhatsApp, it will show up here.",
+      showTranscript: false
+    },
+    webchat: {
+      key: "web_widget",
+      captures: "webchatCaptures", search: "webchatSearch", statusFilter: "webchatStatusFilter",
+      typeFilter: "webchatTypeFilter", sinceFilter: "webchatSinceFilter", hideTest: "webchatHideTest",
+      drawerId: "webchatDrawerId", drawerDetail: "webchatDrawerDetail",
+      idPrefix: "egWebchat", contactLabel: "Visitor", calls: "webchatChats", callsTitle: "Conversations", callsWord: "conversation",
+      emptyMessage: "No website chat activity yet. Once your website chat takes an order, a booking or a request, it will show up here.",
       showTranscript: false
     }
   };
@@ -1863,6 +1906,7 @@
     if (state[cfg.search]) params.set("search", state[cfg.search]);
     if (state[cfg.hideTest]) params.set("is_test", "false");
     params.set("limit", "200");
+    params.set("channel", cfg.key);
     api("/api/v1/crm/calls?" + params.toString()).then(function(d){
       state[cfg.calls] = d;
       var open = state[cfg.calls + "Open"] ? d.filter(function(c){ return c.id === state[cfg.calls + "Open"]; })[0] : null;
@@ -1904,20 +1948,22 @@
     if (!detail || detail.id !== call.id) return '<div class="eg-call-transcript eg-small eg-muted">Loading...</div>';
     var lines = (detail.transcript || []).map(function(line){
       if (line.who === "note") return '<div class="eg-call-line note">' + esc(line.text) + '</div>';
-      return '<div class="eg-call-line"><b>' + (line.who === "caller" ? "Caller" : "Assistant") + ':</b> ' + esc(line.text) + '</div>';
+      var who = line.who === "caller" ? cfg.contactLabel : (line.who === "team" ? "Your team" : "Assistant");
+      return '<div class="eg-call-line"><b>' + esc(who) + ':</b> ' + esc(line.text) + '</div>';
     }).join("");
     var cards = (detail.requests || []).map(function(r){
       return '<button class="eg-btn small ghost" data-channel-drawer="' + cfg.key + '" data-channel-drawer-id="' + esc(r.id) + '">Open the ' +
         esc(channelTypeLabel(r.capture_type).toLowerCase()) + ' card</button>';
     }).join("");
     return '<div class="eg-call-transcript">' +
-      (lines || '<div class="eg-small eg-muted">Nothing was said on this call.</div>') +
+      (lines || '<div class="eg-small eg-muted">Nothing was said.</div>') +
       (cards ? '<div class="eg-vtile-actions">' + cards + '</div>' : '') +
       '</div>';
   }
 
   function callRowHtml(cfg, call){
-    var who = call.contact ? (call.contact.name || formatPhone(call.contact.phone) || "Unknown caller") : "Unknown caller";
+    var unknown = cfg.key === "web_widget" ? "Website visitor" : (cfg.key === "voice" ? "Unknown caller" : "Unknown");
+    var who = call.contact ? (call.contact.name || formatPhone(call.contact.phone) || unknown) : unknown;
     var number = call.contact && call.contact.name ? formatPhone(call.contact.phone) : "";
     var pill = call.status === "in_progress" ? '<span class="eg-pill green">Live</span>'
       : call.transfer === "answered" ? '<span class="eg-pill green">Picked up</span>'
@@ -1942,12 +1988,12 @@
     var body = calls.length
       ? '<div class="eg-calls">' + shown.map(function(c){ return callRowHtml(cfg, c); }).join("") + '</div>' +
         (calls.length > CALLS_SHOWN
-          ? '<button class="eg-btn small ghost" data-calls-all="' + cfg.key + '" style="margin-top:8px">' + (all ? 'Show fewer' : 'Show all ' + calls.length + ' calls') + '</button>'
+          ? '<button class="eg-btn small ghost" data-calls-all="' + cfg.key + '" style="margin-top:8px">' + (all ? 'Show fewer' : 'Show all ' + calls.length + ' ' + cfg.callsWord + 's') + '</button>'
           : '')
-      : '<div class="eg-small eg-muted">No calls in this period.</div>';
+      : '<div class="eg-small eg-muted">No ' + cfg.callsWord + 's in this period.</div>';
     return '<div class="eg-card eg-activity-section" style="margin-bottom:14px">' +
-      '<div class="eg-cardhead"><h3 style="margin:0">Calls <span class="eg-small eg-muted" style="font-weight:500">(' + calls.length + ')</span></h3>' +
-      '<span class="eg-small eg-muted" style="margin-left:auto">Every call - click one for what was said</span></div>' +
+      '<div class="eg-cardhead"><h3 style="margin:0">' + esc(cfg.callsTitle) + ' <span class="eg-small eg-muted" style="font-weight:500">(' + calls.length + ')</span></h3>' +
+      '<span class="eg-small eg-muted" style="margin-left:auto">Every ' + cfg.callsWord + ' - click one for what was said</span></div>' +
       body + '</div>';
   }
 
@@ -2106,7 +2152,7 @@
       : allCaptures;
     var hasCalls = cfg.calls && (state[cfg.calls] || []).length;
     if (!captures.length) return filters + '<div class="eg-card"><div class="eg-small eg-muted">' +
-      esc(hasCalls ? "No requests in this view - every call is listed above." : cfg.emptyMessage) + '</div></div>';
+      esc(hasCalls ? "No requests in this view - every " + cfg.callsWord + " is listed above." : cfg.emptyMessage) + '</div></div>';
 
     // Split into the three purpose-built sections instead of one
     // undifferentiated grid: orders move through a status workflow so they
@@ -2290,6 +2336,8 @@
   // call instead.
   function textStatusHtml(v){
     if (v.text_status === "sent") return '<div class="eg-text-status ok">&#10003; Customer texted</div>';
+    if (v.text_status === "whatsapp") return '<div class="eg-text-status ok">&#10003; Customer told on WhatsApp</div>';
+    if (v.text_status === "emailed") return '<div class="eg-text-status ok">&#10003; Customer emailed</div>';
     if (v.text_status === "off") {
       return '<div class="eg-text-status bad">&#9742; Call the customer: texts are turned off &mdash; ' + esc(v.contact.phone || "no number on file") + '</div>';
     }
@@ -3585,6 +3633,7 @@
   function bindAllChannelDrawers(){
     bindChannelDrawer(CHANNEL_ACTIVITY.voice);
     bindChannelDrawer(CHANNEL_ACTIVITY.whatsapp);
+    bindChannelDrawer(CHANNEL_ACTIVITY.webchat);
   }
 
   // ---- Lead detail drawer ----

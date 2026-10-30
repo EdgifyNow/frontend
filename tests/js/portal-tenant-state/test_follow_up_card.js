@@ -44,7 +44,7 @@ text = box.textContent;
 assert(/booking/.test(text) && /haircut/.test(text), "a salon booking's details, not only orders");
 assert(/Replied YES/.test(text), "a YES reply stands out");
 
-box.innerHTML = hooks.renderCaptureTile(Object.assign({}, base, { id: "f3", summary: "The assistant couldn't help - call them back",
+box.innerHTML = hooks.renderCaptureTile(Object.assign({}, base, { id: "f3", summary: "Handed to the team - please call them back",
   details: { ended: "trouble" }, status: "completed" }), cfg);
 assert(!box.querySelector("[data-channel-action]"), "nothing to do once handled");
 

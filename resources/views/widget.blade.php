@@ -45,6 +45,7 @@ html,body{margin:0;height:100%;font-family:Inter,ui-sans-serif,system-ui,-apple-
 .wg-form{display:flex;gap:8px}
 .wg-input{flex:1;background:var(--wg-bg);border:1px solid var(--wg-line);border-radius:20px;padding:9px 14px;font:inherit;font-size:13.5px;outline:none}
 .wg-send{width:36px;height:36px;border-radius:50%;background:var(--wg-primary);border:0;color:#fff;cursor:pointer;flex:0 0 36px;display:flex;align-items:center;justify-content:center}
+.wg-disclaimer{margin-top:6px;font-size:10px;line-height:1.35;color:#8a93a3;text-align:center}
 .wg-panel{padding:12px;background:#fff;border-top:1px solid var(--wg-line)}
 .wg-panel h4{margin:0 0 8px;font-size:13px}
 .wg-panel input,.wg-panel select{width:100%;padding:8px 10px;border:1px solid var(--wg-line);border-radius:8px;font:inherit;font-size:12.5px;margin-bottom:8px}
