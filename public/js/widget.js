@@ -5,6 +5,18 @@
   // defaulting to the staging API is exactly the wrong failure mode in
   // production - render() below blocks with a visible error instead.
   var API_BASE = (window.EDGIFY_CONFIG && window.EDGIFY_CONFIG.API_BASE_URL) || "";
+
+  // The assistant's reply as the visitor should see it: **bold** as bold, a
+  // markdown link or a bare web address as a link that opens in a new tab,
+  // line breaks kept. Works on the already-escaped text, so nothing the reply
+  // contains can become markup of its own.
+  function formatReply(text){
+    var html = esc(text || "");
+    html = html.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+    html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+    html = html.replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, '$1<a href="$2" target="_blank" rel="noopener noreferrer">$2</a>');
+    return html.replace(/\n/g, "<br>");
+  }
   var CONV_KEY = "eg_widget_conversation_id";
   var root = document.getElementById("wgRoot");
 
@@ -225,7 +237,7 @@
 
     var msgsHtml = state.messages.map(function(m){
       var cls = m.who === "user" ? "wg-msg-user" : (m.who === "error" ? "wg-msg-error" : "wg-msg-bot");
-      return '<div class="wg-msg ' + cls + '">' + esc(m.text) + '</div>';
+      return '<div class="wg-msg ' + cls + '">' + (m.who === "user" ? esc(m.text) : formatReply(m.text)) + '</div>';
     }).join("");
 
     if (!state.messages.length && b.welcome_message) {
@@ -453,10 +465,25 @@
     });
   }
 
+  // The chat's re-render once a reply arrives: whatever the visitor typed
+  // meanwhile is kept, and the cursor is back in the message box so they can
+  // just keep typing.
+  function renderKeepingInput(){
+    var before = document.getElementById("wgChatInput");
+    var draft = before ? before.value : "";
+    render();
+    var input = document.getElementById("wgChatInput");
+    if (input) {
+      input.value = draft;
+      input.focus();
+      if (input.setSelectionRange) input.setSelectionRange(draft.length, draft.length);
+    }
+  }
+
   function sendMessage(text){
     state.messages.push({ who: "user", text: text });
     state.sending = true;
-    render();
+    renderKeepingInput();
 
     var body = { message: text };
     if (state.conversationId) body.conversation_id = state.conversationId;
@@ -467,12 +494,12 @@
         state.conversationId = data.conversation_id;
         sessionStorage.setItem(CONV_KEY, data.conversation_id);
         state.messages.push({ who: "bot", text: data.answer });
-        render();
+        renderKeepingInput();
       })
       .catch(function(err){
         state.sending = false;
         state.messages.push({ who: "error", text: err.message });
-        render();
+        renderKeepingInput();
       });
   }
 

@@ -6,6 +6,10 @@
   // production - render() below blocks with a visible error instead.
   var API_BASE = (window.EDGIFY_CONFIG && window.EDGIFY_CONFIG.API_BASE_URL) || "";
   var TOKEN_KEY = "eg_portal_token";
+  // "Keep me signed in on this device": when this device's session ends (ms).
+  var KEPT_KEY = "eg_portal_kept_until";
+  var KEPT_WARNING_MS = 5 * 60 * 1000;
+  var KEPT_SESSION_HOURS = (window.EDGIFY_CONFIG && window.EDGIFY_CONFIG.KEPT_SESSION_HOURS) || 3;
   // Auto logout after this many minutes of no mouse/keyboard/touch activity,
   // per the client's request that a login should not stay valid forever.
   // Config-driven with a 10 minute fallback so it can be tuned per
@@ -156,6 +160,16 @@
     whatsappChatsAll: false,
     // Website chat: the same board as Voice and WhatsApp, for requests made
     // in the chat on the business's website, and every chat.
+    allCaptures: null,
+    allSearch: "",
+    allStatusFilter: "active",
+    allTypeFilter: "all",
+    allSinceFilter: "7d",
+    allHideTest: false,
+    allDrawerId: null,
+    allDrawerDetail: null,
+    allLastUpdated: null,
+    allKnownArrivalIds: null,
     webchatCaptures: null,
     webchatSearch: "",
     webchatStatusFilter: "active",
@@ -280,6 +294,19 @@
   // every keystroke. This restores focus (by element id) and cursor
   // position after such a re-render, so typing into a search input feels
   // normal instead of losing focus after each character.
+  // A chat's re-render after the reply: whatever was typed meanwhile is kept,
+  // and the cursor is back in the message box, ready for the next message.
+  function renderKeepingChatInput(inputId){
+    var before = document.getElementById(inputId);
+    var draft = before ? before.value : "";
+    render();
+    var input = document.getElementById(inputId);
+    if (input) {
+      input.value = draft;
+      input.focus();
+      if (input.setSelectionRange) input.setSelectionRange(draft.length, draft.length);
+    }
+  }
   function preserveFocus(fn){
     var active = document.activeElement;
     var id = active && active.id;
@@ -434,6 +461,8 @@
 
   function doLogout(){
     localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(KEPT_KEY);
+    stopKeptTimers();
     // Must run before state is reassigned below: stopChannelAutoRefresh()
     // clears setInterval(...) via state._channelRefreshTimer, a runtime-only
     // field that isn't part of initialState()'s literal. Clearing it after
@@ -461,8 +490,44 @@
   function stopIdleTimer(){
     if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
   }
+
+  // A kept session: no idle sign-out on this device, but it still ends a few
+  // hours after signing in (the server's token ends then too), with a warning
+  // a few minutes before - so the business keeps an eye on it.
+  var keptTimers = [];
+  function keptUntil(){
+    var until = Number(localStorage.getItem(KEPT_KEY) || 0);
+    return until > 0 ? until : null;
+  }
+  function stopKeptTimers(){
+    keptTimers.forEach(clearTimeout);
+    keptTimers = [];
+  }
+  function scheduleKeptSession(){
+    stopKeptTimers();
+    var until = keptUntil();
+    if (!until || !state.token) return false;
+    var left = until - Date.now();
+    if (left <= 0) {
+      doLogout();
+      showToast("This device's session has ended - please sign in again", true);
+      return true;
+    }
+    if (left > KEPT_WARNING_MS) {
+      keptTimers.push(setTimeout(function(){
+        showToast("This device will sign out in 5 minutes - sign in again to keep it running", true);
+      }, left - KEPT_WARNING_MS));
+    }
+    keptTimers.push(setTimeout(function(){
+      doLogout();
+      showToast("This device's session has ended - please sign in again", true);
+    }, left));
+    return true;
+  }
+
   function resetIdleTimer(){
     if (!state.token) { stopIdleTimer(); return; }
+    if (keptUntil()) { stopIdleTimer(); if (!keptTimers.length) scheduleKeptSession(); return; }
     // While the Meta Embedded Signup popup is open, the user is actively
     // filling out Meta's own form in a separate window - this window
     // never sees a mousedown/keydown/scroll during that, so the idle
@@ -480,14 +545,17 @@
     document.addEventListener(evt, resetIdleTimer, { passive: true });
   });
 
-  function doLogin(email, password){
+  function doLogin(email, password, keepSignedIn){
     state.error = null;
     state.loading = true;
     render();
-    api("/api/v1/auth/login", { method: "POST", body: { email: email, password: password } })
+    api("/api/v1/auth/login", { method: "POST", body: { email: email, password: password, keep_signed_in: !!keepSignedIn } })
       .then(function(data){
         state.token = data.access_token;
         localStorage.setItem(TOKEN_KEY, state.token);
+        stopKeptTimers();
+        if (data.kept_session && data.expires_in) localStorage.setItem(KEPT_KEY, String(Date.now() + data.expires_in * 1000));
+        else localStorage.removeItem(KEPT_KEY);
         return api("/api/v1/auth/me");
       })
       .then(function(me){
@@ -712,6 +780,7 @@
     if (v === "voice") { loadChannelCaptures(CHANNEL_ACTIVITY.voice); startChannelAutoRefresh(CHANNEL_ACTIVITY.voice); }
     else if (v === "whatsapp") { loadWhatsappConnection(); loadChannelCaptures(CHANNEL_ACTIVITY.whatsapp); startChannelAutoRefresh(CHANNEL_ACTIVITY.whatsapp); }
     else if (v === "webchat") { loadChannelCaptures(CHANNEL_ACTIVITY.webchat); startChannelAutoRefresh(CHANNEL_ACTIVITY.webchat); }
+    else if (v === "all") { loadChannelCaptures(CHANNEL_ACTIVITY.all); startChannelAutoRefresh(CHANNEL_ACTIVITY.all); }
     else stopChannelAutoRefresh();
     render();
   }
@@ -742,6 +811,9 @@
       '<form id="egLoginForm">' +
       '<div class="eg-form-row"><label>Email</label><input class="eg-input" type="email" id="egEmail" required autocomplete="username" /></div>' +
       '<div class="eg-form-row"><label>Password</label><input class="eg-input" type="password" id="egPassword" required autocomplete="current-password" /></div>' +
+      '<label class="eg-small" style="display:flex;gap:8px;align-items:flex-start;margin:-2px 0 14px;line-height:1.4">' +
+      '<input type="checkbox" id="egKeepSignedIn" style="margin-top:2px" />' +
+      '<span>Keep me signed in on this device<br><span class="eg-muted">For a screen at your counter or kitchen. Signs out after ' + KEPT_SESSION_HOURS + ' hours.</span></span></label>' +
       '<button type="submit" class="eg-btn" id="egLoginBtn" style="width:100%">' + (state.loading ? '<span class="eg-spin"></span>Signing in...' : 'Sign In') + '</button>' +
       '</form>' +
       '<div class="eg-small eg-muted" style="margin-top:16px">API: ' + esc(API_BASE) + '</div>' +
@@ -752,7 +824,8 @@
         e.preventDefault();
         var email = document.getElementById("egEmail").value.trim();
         var pw = document.getElementById("egPassword").value;
-        doLogin(email, pw);
+        var keep = document.getElementById("egKeepSignedIn");
+        doLogin(email, pw, keep && keep.checked);
       });
     }
   }
@@ -802,6 +875,8 @@
     }
     // The website chat is every client's channel: its requests and chats.
     items.splice(3, 0, { id: "webchat", label: "Website Chat", icon: "chat" });
+    // Every channel's requests in one place - the page to keep open.
+    items.splice(1, 0, { id: "all", label: "All Activity", icon: "spark" });
     return items;
   }
 
@@ -842,7 +917,7 @@
       '<div id="egContent"></div>' +
       (isAdmin() ? '' : '<div class="eg-disclaimer">' + esc(PORTAL_DISCLAIMER) + '</div>') +
       '</main>' +
-      '</div>' + toastHtml + leadDrawerHtml() + contactDrawerHtml() + appointmentDrawerHtml() + newAppointmentDrawerHtml() + voiceDrawerHtml() + whatsappDrawerHtml() + channelDrawerHtml(CHANNEL_ACTIVITY.webchat);
+      '</div>' + toastHtml + leadDrawerHtml() + contactDrawerHtml() + appointmentDrawerHtml() + newAppointmentDrawerHtml() + voiceDrawerHtml() + whatsappDrawerHtml() + channelDrawerHtml(CHANNEL_ACTIVITY.webchat) + channelDrawerHtml(CHANNEL_ACTIVITY.all);
 
     document.querySelectorAll("[data-nav]").forEach(function(el){
       el.addEventListener("click", function(){
@@ -876,6 +951,7 @@
     if (state.view === "voice") return "Voice Activity";
     if (state.view === "whatsapp") return "WhatsApp Activity";
     if (state.view === "webchat") return "Website Chat";
+    if (state.view === "all") return "All Activity";
     return "";
   }
   function viewSub(){
@@ -894,6 +970,7 @@
     if (state.view === "voice") return "Live calls, orders, and appointments captured by your voice assistant.";
     if (state.view === "whatsapp") return "Live orders, appointments, and leads captured over WhatsApp.";
     if (state.view === "webchat") return "Orders, bookings and requests from the chat on your website, and every conversation.";
+    if (state.view === "all") return "Every order, booking and request - from calls, WhatsApp and your website chat - in one place.";
     return "";
   }
 
@@ -915,6 +992,7 @@
     if (state.view === "voice") { el.innerHTML = voiceHtml(); bindVoice(); return; }
     if (state.view === "whatsapp") { el.innerHTML = whatsappHtml(); bindWhatsapp(); return; }
     if (state.view === "webchat") { el.innerHTML = channelActivityHtml(CHANNEL_ACTIVITY.webchat); bindChannelActivity(CHANNEL_ACTIVITY.webchat); return; }
+    if (state.view === "all") { el.innerHTML = channelActivityHtml(CHANNEL_ACTIVITY.all); bindChannelActivity(CHANNEL_ACTIVITY.all); return; }
   }
 
   // ---- Dashboard ----
@@ -1822,6 +1900,16 @@
       emptyMessage: "No WhatsApp activity yet. Once your assistant captures an order, appointment, or lead over WhatsApp, it will show up here.",
       showTranscript: false
     },
+    all: {
+      // Every channel's requests on one board (calls, WhatsApp, website chat).
+      key: "all", allChannels: true,
+      captures: "allCaptures", search: "allSearch", statusFilter: "allStatusFilter",
+      typeFilter: "allTypeFilter", sinceFilter: "allSinceFilter", hideTest: "allHideTest",
+      drawerId: "allDrawerId", drawerDetail: "allDrawerDetail",
+      idPrefix: "egAll", contactLabel: "Customer",
+      emptyMessage: "No activity yet. Orders, bookings and requests from calls, WhatsApp and your website chat will all show up here.",
+      showTranscript: true
+    },
     webchat: {
       key: "web_widget",
       captures: "webchatCaptures", search: "webchatSearch", statusFilter: "webchatStatusFilter",
@@ -1874,7 +1962,7 @@
 
   function loadChannelCaptures(cfg, opts){
     var params = new URLSearchParams();
-    params.set("channel", cfg.key);
+    if (!cfg.allChannels) params.set("channel", cfg.key);
     // "active" is a client-side grouping (see CHANNEL_ACTIVE_STATUSES), not
     // a real backend status, so it fetches unfiltered by status and the
     // completed/cancelled tiles get dropped when rendering instead.
@@ -3634,6 +3722,7 @@
     bindChannelDrawer(CHANNEL_ACTIVITY.voice);
     bindChannelDrawer(CHANNEL_ACTIVITY.whatsapp);
     bindChannelDrawer(CHANNEL_ACTIVITY.webchat);
+    bindChannelDrawer(CHANNEL_ACTIVITY.all);
   }
 
   // ---- Lead detail drawer ----
@@ -4181,7 +4270,7 @@
         if (!msg) return;
         state.chatLog.push({ who: "me", text: msg });
         input.value = "";
-        render();
+        renderKeepingChatInput("egTestChatInput");
         var chatBody = { message: msg };
         if (state.chatConversationId) chatBody.conversation_id = state.chatConversationId;
         if (state.selectedAssistantId) chatBody.assistant_id = state.selectedAssistantId;
@@ -4189,13 +4278,13 @@
           .then(function(data){
             state.chatConversationId = data.conversation_id;
             state.chatLog.push({ who: "bot", text: data.answer });
-            render();
+            renderKeepingChatInput("egTestChatInput");
             var box = document.getElementById("egChatMessages");
             if (box) box.scrollTop = box.scrollHeight;
           })
           .catch(function(err){
             state.chatLog.push({ who: "bot", text: "Error: " + err.message });
-            render();
+            renderKeepingChatInput("egTestChatInput");
           });
       });
     }
@@ -5052,13 +5141,13 @@
       .then(function(data){
         state.demoChatConversationId = data.conversation_id;
         state.demoChatLog.push({ who: "bot", text: data.answer });
-        render();
+        renderKeepingChatInput("egDemoChatInput");
         var box = document.getElementById("egDemoMessages");
         if (box) box.scrollTop = box.scrollHeight;
       })
       .catch(function(err){
         state.demoChatLog.push({ who: "bot", text: "Error: " + err.message });
-        render();
+        renderKeepingChatInput("egDemoChatInput");
       });
   }
   function bindDemo(){
@@ -5417,6 +5506,10 @@
       callModeHtml: callModeHtml,
       confirmLoopHtml: confirmLoopHtml,
       callsSectionHtml: callsSectionHtml,
+      renderKeepingChatInput: renderKeepingChatInput,
+      scheduleKeptSession: scheduleKeptSession,
+      keptTimerCount: function(){ return keptTimers.length; },
+      loadChannelCaptures: loadChannelCaptures,
       businessSettingsHtml: businessSettingsHtml,
       guidanceRulesHtml: guidanceRulesHtml,
       renderFollowUpTile: renderFollowUpTile,
