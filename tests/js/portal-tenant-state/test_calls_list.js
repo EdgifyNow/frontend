@@ -93,5 +93,13 @@ assert(/Visitor:\s*Do you do keratin\?/.test(box.textContent) && /Your team:\s*Y
 assert(/every conversation is listed above/.test(box.textContent), "no requests yet, every conversation listed");
 assert(hooks.navItems().some(function(i){ return i.id === "webchat" && i.label === "Website Chat"; }), "Website Chat in the menu");
 
+// "Copy for replay test": the conversation, ready to send to development.
+assert(box.querySelector('[data-copy-replay="v1"]'), "an open conversation offers Copy for replay test");
+hooks.state.tenantSelf = { name: "Glow Salon" };
+const replay = hooks.replayText(webchat, hooks.state.webchatChatsDetail);
+assert(/^REPLAY TEST/.test(replay) && /Business: Glow Salon/.test(replay) && /Channel: website chat/.test(replay), "it names the business and channel");
+assert(/Visitor: Do you do keratin\?/.test(replay) && /Your team: Yes - Fridays\./.test(replay), "it carries the transcript");
+assert(/Expected \(what should have happened\):/.test(replay), "with a line for what should have happened");
+
 console.log("\n" + (failures ? failures + " FAILED" : "all passed"));
 process.exit(failures ? 1 : 0);

@@ -2043,10 +2043,36 @@
       return '<button class="eg-btn small ghost" data-channel-drawer="' + cfg.key + '" data-channel-drawer-id="' + esc(r.id) + '">Open the ' +
         esc(channelTypeLabel(r.capture_type).toLowerCase()) + ' card</button>';
     }).join("");
+    var copy = '<button class="eg-btn small ghost" data-copy-replay="' + esc(call.id) + '" data-copy-channel="' + esc(cfg.key) + '">Copy for replay test</button>';
     return '<div class="eg-call-transcript">' +
       (lines || '<div class="eg-small eg-muted">Nothing was said.</div>') +
-      (cards ? '<div class="eg-vtile-actions">' + cards + '</div>' : '') +
+      '<div class="eg-vtile-actions">' + cards + copy + '</div>' +
       '</div>';
+  }
+
+  // A conversation as a replay test: what was said, what it led to, and a line
+  // for what should have happened - ready to paste to development, so a
+  // later change can never break it for this client.
+  function replayText(cfg, detail){
+    var business = (state.tenantSelf && state.tenantSelf.name) || "";
+    var who = cfg.contactLabel || "Customer";
+    var out = [
+      "REPLAY TEST",
+      "Business: " + business,
+      "Channel: " + (cfg.key === "voice" ? "phone call" : cfg.key === "whatsapp" ? "WhatsApp" : "website chat"),
+      "When: " + (detail.started_at || ""),
+      "Conversation id: " + detail.id,
+      "Outcome now: " + (detail.outcome || ""),
+      "Requests: " + ((detail.requests || []).map(function(r){ return r.capture_type + " - " + (r.summary || ""); }).join("; ") || "none"),
+      "",
+      "Transcript:"
+    ];
+    (detail.transcript || []).forEach(function(line){
+      var label = line.who === "caller" ? who : (line.who === "team" ? "Your team" : (line.who === "note" ? "Note" : "Assistant"));
+      out.push(label + ": " + line.text);
+    });
+    out.push("", "Expected (what should have happened): ");
+    return out.join("\n");
   }
 
   function callRowHtml(cfg, call){
@@ -2870,6 +2896,23 @@
         if (e.target !== el || (e.key !== "Enter" && e.key !== " ")) return;
         e.preventDefault();
         toggle();
+      });
+    });
+    document.querySelectorAll("[data-copy-replay]").forEach(function(el){
+      el.addEventListener("click", function(e){
+        e.stopPropagation();
+        var detail = state[cfg.calls + "Detail"];
+        if (!detail || detail.id !== el.getAttribute("data-copy-replay")) return;
+        var text = replayText(cfg, detail);
+        var done = function(){ showToast("Copied - paste it to development with what should have happened"); };
+        var fallback = function(){
+          var area = document.createElement("textarea");
+          area.value = text; document.body.appendChild(area); area.select();
+          try { document.execCommand("copy"); done(); } catch (err) { showToast("Couldn't copy - select the transcript and copy it", true); }
+          document.body.removeChild(area);
+        };
+        if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, fallback);
+        else fallback();
       });
     });
     document.querySelectorAll('[data-calls-all="' + cfg.key + '"]').forEach(function(el){
@@ -5507,6 +5550,7 @@
       confirmLoopHtml: confirmLoopHtml,
       callsSectionHtml: callsSectionHtml,
       renderKeepingChatInput: renderKeepingChatInput,
+      replayText: replayText,
       scheduleKeptSession: scheduleKeptSession,
       keptTimerCount: function(){ return keptTimers.length; },
       loadChannelCaptures: loadChannelCaptures,
