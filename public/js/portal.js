@@ -2710,7 +2710,7 @@
       '<div class="eg-vtile-top"><div class="eg-order-ref">&#9742; FOLLOW UP</div><span class="eg-pill red">' + ended + '</span></div>' +
       cardWhoHtml(v) +
       '<div class="eg-vtile-headline">' + esc(v.summary) + '</div>' +
-      (d.request_label ? '<div class="eg-small" style="margin-top:4px"><b>Was putting together:</b> a ' + esc(d.request_label) + '</div>' : '') +
+      (d.request_label ? '<div class="eg-small" style="margin-top:4px"><b>Was putting together:</b> ' + (/^[aeiou]/i.test(d.request_label) ? 'an ' : 'a ') + esc(d.request_label) + '</div>' : '') +
       followUpCapturedHtml(d) +
       textLine +
       cardFootHtml(v) +
