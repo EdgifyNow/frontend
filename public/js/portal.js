@@ -2513,7 +2513,16 @@
     if (requests && !/^\s*(no|none|nothing|no thanks?|nope|nah)\b\.?\s*$/i.test(String(requests))) {
       notes.push('<div class="eg-small" data-order-requests style="color:var(--red)"><b>Note:</b> ' + esc(formatDetailValue(requests)) + '</div>');
     }
+    if (details.needs_check) notes.push(needsCheckHtml(details));
     return notes.length ? '<div style="margin-top:6px">' + notes.join("") + '</div>' : '';
+  }
+
+  // Something the assistant couldn't settle with the customer (a name still
+  // not right after spelling it): for the team to check when confirming.
+  function needsCheckHtml(details){
+    return details && details.needs_check
+      ? '<div class="eg-small" data-needs-check style="color:var(--red)"><b>Please check:</b> ' + esc(String(details.needs_check)) + '</div>'
+      : '';
   }
 
   function renderOrderTile(v, cfg){
@@ -2567,7 +2576,8 @@
     var heading = v.contact.name || phone || "Unknown caller";
     return '<div class="eg-vtile-name">' + esc(heading) +
       (v.contact.is_test ? ' <span class="eg-tag" style="background:#f7d774">TEST</span>' : '') + '</div>' +
-      (v.contact.name && phone ? '<div class="eg-vtile-phone">' + esc(phone) + '</div>' : '');
+      (v.contact.name && phone ? '<div class="eg-vtile-phone">' + esc(phone) + '</div>' : '') +
+      (v.capture_type === "order" ? '' : needsCheckHtml(v.details));  // an order shows it with the kitchen notes
   }
   function cardFootHtml(v, withoutAge){
     return confirmLoopHtml(v) +
