@@ -265,7 +265,7 @@
     return name || "Unknown contact";
   }
   function sourceLabel(s){
-    var map = { website_form: "Website Form", website_chat: "Website chat", whatsapp: "WhatsApp", voice: "Voice", manual: "Manual" };
+    var map = { website_form: "Website Form", website_chat: "Website chat", whatsapp: "WhatsApp", voice: "Voice", manual: "Manual", sms: "Text message" };
     return map[s] || s;
   }
   function contactMapFromState(){
@@ -1410,7 +1410,7 @@
       '<input id="egLeadSearch" placeholder="Search leads or contacts..." value="' + esc(state.leadSearch) + '" />' +
       '<select id="egLeadDateFilter">' + selOpts([{value:"month",label:"This month"},{value:"quarter",label:"This Quarter"},{value:"year",label:"This year"},{value:"all",label:"All Time"}], state.leadDateFilter) + '</select>' +
       '<select id="egLeadStatusFilter">' + selOpts(["all","new","contacted","qualified","booked","won","lost"].map(function(s){ return {value:s, label: s === "all" ? "All Statuses" : capitalize(s)}; }), state.leadStatusFilter) + '</select>' +
-      '<select id="egLeadSourceFilter">' + selOpts([{value:"all",label:"All Sources"},{value:"website_form",label:"Website Form"},{value:"website_chat",label:"Website chat"},{value:"whatsapp",label:"WhatsApp"},{value:"voice",label:"Voice"},{value:"manual",label:"Manual"}], state.leadSourceFilter) + '</select>' +
+      '<select id="egLeadSourceFilter">' + selOpts([{value:"all",label:"All Sources"},{value:"website_form",label:"Website Form"},{value:"website_chat",label:"Website chat"},{value:"whatsapp",label:"WhatsApp"},{value:"voice",label:"Voice"},{value:"sms",label:"Text message"},{value:"manual",label:"Manual"}], state.leadSourceFilter) + '</select>' +
       '<button class="eg-btn" id="egDownloadLeadsCsv">Download Leads CSV</button>' +
       '</div>' +
       (lrows ? '<table class="eg-table"><thead><tr><th>Lead</th><th>Interest</th><th>Source</th><th>Status</th><th>Priority</th><th>Last Activity</th><th>Created</th><th>Actions</th></tr></thead><tbody>' + lrows + '</tbody></table>' : '<div class="eg-empty">' + (state.leadSearch ? "No matching leads." : "No leads in this period.") + '</div>') +
@@ -1907,7 +1907,7 @@
       typeFilter: "allTypeFilter", sinceFilter: "allSinceFilter", hideTest: "allHideTest",
       drawerId: "allDrawerId", drawerDetail: "allDrawerDetail",
       idPrefix: "egAll", contactLabel: "Customer",
-      emptyMessage: "No activity yet. Orders, bookings and requests from calls, WhatsApp and your website chat will all show up here.",
+      emptyMessage: "No activity yet. Orders, bookings and requests from calls, WhatsApp, text messages and your website chat will all show up here.",
       showTranscript: true
     },
     webchat: {
@@ -2561,7 +2561,7 @@
     return "(" + digits.slice(0, 3) + ") " + digits.slice(3, 6) + "-" + digits.slice(6);
   }
   function channelWord(v){
-    return v.channel === "whatsapp" ? "WhatsApp" : (v.channel === "voice" ? "Phone call" : "Website");
+    return v.channel === "whatsapp" ? "WhatsApp" : (v.channel === "voice" ? "Phone call" : (v.channel === "sms" ? "Text message" : "Website"));
   }
   // The card's attributes: the whole card opens the details, by click or by
   // Enter/Space when focused with the keyboard - so no separate "View" button.
