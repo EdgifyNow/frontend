@@ -2517,6 +2517,14 @@
     return notes.length ? '<div style="margin-top:6px">' + notes.join("") + '</div>' : '';
   }
 
+  // What the customer asked to have noted on a booking or request ("the
+  // agenda is AI services"), on the card itself.
+  function customerNoteHtml(details){
+    return details && details.notes
+      ? '<div class="eg-small" data-card-note style="margin-top:2px"><b>Note:</b> ' + esc(formatDetailValue(details.notes)) + '</div>'
+      : '';
+  }
+
   // Something the assistant couldn't settle with the customer (a name still
   // not right after spelling it): for the team to check when confirming.
   function needsCheckHtml(details){
@@ -2577,7 +2585,7 @@
     return '<div class="eg-vtile-name">' + esc(heading) +
       (v.contact.is_test ? ' <span class="eg-tag" style="background:#f7d774">TEST</span>' : '') + '</div>' +
       (v.contact.name && phone ? '<div class="eg-vtile-phone">' + esc(phone) + '</div>' : '') +
-      (v.capture_type === "order" ? '' : needsCheckHtml(v.details));  // an order shows it with the kitchen notes
+      (v.capture_type === "order" ? '' : customerNoteHtml(v.details) + needsCheckHtml(v.details));  // an order shows these with the kitchen notes
   }
   function cardFootHtml(v, withoutAge){
     return confirmLoopHtml(v) +
@@ -3130,7 +3138,14 @@
   ];
   // Must match VOICE_AUDIENCES in the backend's app/voice_settings.py. ""
   // saves as not chosen, which is US English.
-  var ASSISTANT_VOICE_OPTIONS = [["en-US", "US English (default)"], ["en-IN", "Indian English"], ["en-GB", "UK English"], ["en-AU", "Australian English"]];
+  // The assistant's voice: accent, and a female or male voice. The plain
+  // accents are the earlier choices, kept as they were.
+  var ASSISTANT_VOICE_OPTIONS = [
+    ["en-US", "US English - female (default)"], ["en-US-f", "US English - female"], ["en-US-m", "US English - male"],
+    ["en-IN", "Indian English"], ["en-IN-f", "Indian English - female"], ["en-IN-m", "Indian English - male"],
+    ["en-GB", "UK English"], ["en-GB-f", "UK English - female"], ["en-GB-m", "UK English - male"],
+    ["en-AU", "Australian English"], ["en-AU-f", "Australian English - female"], ["en-AU-m", "Australian English - male"]
+  ];
   var SPEECH_MODEL_OPTIONS = [["default", "Standard (default)"], ["phone_call", "Phone call (enhanced)"]];
   var VOICE_AUDIENCE_OPTIONS = [
     ["", "US English (default)"], ["en-IN", "Indian English"], ["en-GB", "UK English"], ["en-AU", "Australian English"]
