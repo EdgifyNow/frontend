@@ -56,6 +56,34 @@ assert(/1:30 PM/.test(text) && /Table for 6/.test(text), "today's plan in 12-hou
 assert(/Busiest on Sat, around 7:00 PM/.test(text) && /Opening hours/.test(text) && /94% done without staff/.test(text), "the week");
 assert(box.querySelector("#egTodayAskForm") && box.querySelectorAll("[data-today-chip]").length === 4, "ask your assistant");
 
+// The layout: attention next to this week, today's plan next to the chat.
+const rows = box.querySelectorAll("[data-today-row]");
+assert(rows.length === 2 && rows[0].querySelector("[data-today-kind]") && rows[0].querySelector("[data-today-week]"), "row 1: attention and this week");
+assert(rows[1].querySelector("[data-today-plan]") && rows[1].querySelector("[data-today-ask]"), "row 2: today's plan and ask your assistant");
+assert(box.querySelectorAll("[data-dash-tab]").length === 3, "three tabs: Today, Brand visibility, Insights");
+
+// Brand visibility: the website report, scores and quick wins; the rest is coming.
+hooks.state.dashTab = "brand";
+hooks.state.brandReport = { status: "ok", url: "https://singhsbiryanipot.com", checked_at: new Date().toISOString(), load_time: "4.8 s",
+  scores: [{ label: "Speed", score: 52 }, { label: "Google search", score: 88 }, { label: "Easy to use", score: 79 }, { label: "Safe & up to date", score: 92 }],
+  quick_wins: ["Compress your photos - they make the page slower than it needs to be."], source: "Google Lighthouse (open source), via PageSpeed Insights" };
+box.innerHTML = hooks.clientDashboardHtml();
+let brand = box.textContent;
+assert(/Your online presence report/.test(brand) && /Speed/.test(brand) && /52/.test(brand) && /4\.8 s/.test(brand), "website scores");
+assert(/Compress your photos/.test(brand) && /Google Lighthouse/.test(brand), "quick wins and where they come from");
+assert(/This month's posts & reels/.test(brand) && /Coming soon/.test(brand), "the planner skeleton");
+hooks.state.brandReport = { status: "no_website" };
+box.innerHTML = hooks.clientDashboardHtml();
+assert(/Add your website address in Account/.test(box.textContent), "no website on file says where to add it");
+
+// Insights: this week's numbers, the rest coming.
+hooks.state.dashTab = "insights";
+box.innerHTML = hooks.clientDashboardHtml();
+const insights = box.textContent;
+assert(/Staff time saved/.test(insights) && /9\.5 hrs/.test(insights) && /94%/.test(insights), "insights numbers from this week");
+assert(/Download monthly report/.test(insights) && /Busiest hours/.test(insights), "insights skeleton");
+hooks.state.dashTab = "today";
+
 hooks.state.today = null; hooks.state.todayFailed = true;
 win.document.getElementById("egTest").innerHTML = hooks.clientDashboardHtml();
 assert(/couldn't load right now/.test(win.document.getElementById("egTest").textContent), "a day that couldn't load says so");

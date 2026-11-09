@@ -1152,17 +1152,17 @@
     var peak = busiest && busiest.count ? "Busiest on " + busiest.day + (w.peak_hour !== null && w.peak_hour !== undefined ? ", around " + clockText(w.peak_hour + ":00") : "") : "Not enough calls yet";
     var asked = (w.most_asked || []).map(function(q, n){ return '<div style="font-size:14px">' + (n + 1) + ". " + esc(q) + '</div>'; }).join("") ||
       '<div class="eg-small eg-muted">No questions yet this week</div>';
-    return '<div class="eg-card" data-today-week>' + cardHead("spark", "This week", "", "") +
-      '<div class="eg-grid3" style="margin-top:8px">' +
+    var block = 'style="display:flex;flex-direction:column;gap:8px;border-top:1px solid #F1F2F4;padding-top:14px"';
+    return '<div class="eg-card" data-today-week>' + cardHead("spark", "This week", "Insights", "dashboard:insights") +
+      '<div style="display:flex;flex-direction:column;gap:16px;margin-top:8px">' +
       '<div style="display:flex;flex-direction:column;gap:8px"><b style="font-size:13px">Busiest times (last 4 weeks)</b>' +
       '<div role="img" aria-label="Calls and chats by day of the week" style="display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px">' + strip + '</div>' +
       '<span class="eg-small eg-muted">' + esc(peak) + '</span></div>' +
-      '<div style="display:flex;flex-direction:column;gap:6px"><b style="font-size:13px">Most asked</b>' + asked + '</div>' +
-      '<div style="display:flex;flex-direction:column;gap:6px"><b style="font-size:13px">Your assistant</b>' +
+      '<div ' + block + '><b style="font-size:13px">Most asked</b>' + asked + '</div>' +
+      '<div ' + block + '><b style="font-size:13px">Your assistant</b>' +
       '<div style="font-size:14px">' + (w.done_without_staff_pct === null || w.done_without_staff_pct === undefined ? "No calls or chats yet" : esc(w.done_without_staff_pct + "% done without staff")) + '</div>' +
       '<div style="font-size:14px">' + esc((w.requests || 0) + " requests taken") + '</div>' +
-      '<div style="font-size:14px">' + esc((w.handed_to_team || 0) + " handed to your team") + '</div>' +
-      '<div style="font-size:14px">' + esc((w.flagged || 0) + " flagged to check") + '</div></div>' +
+      '<div style="font-size:14px">' + esc((w.handed_to_team || 0) + " handed to your team · " + (w.flagged || 0) + " flagged to check") + '</div></div>' +
       '</div></div>';
   }
 
@@ -1182,16 +1182,153 @@
       '</div>';
   }
 
+  // The dashboard's three tabs: Today (the owner's day), Brand visibility
+  // (how customers find them online) and Insights (how it's all going).
+  var DASH_TABS = [["today", "Today"], ["brand", "Brand visibility"], ["insights", "Insights"]];
+
+  function dashTabsHtml(){
+    var current = state.dashTab || "today";
+    return '<div role="tablist" aria-label="Dashboard views" data-dash-tabs style="display:flex;gap:4px;border-bottom:1px solid #E5E7EB;flex-wrap:wrap;margin-bottom:18px">' +
+      DASH_TABS.map(function(tab){
+        var on = tab[0] === current;
+        return '<button type="button" role="tab" aria-selected="' + on + '" data-dash-tab="' + tab[0] + '" style="min-height:44px;padding:10px 18px;border:0;background:none;cursor:pointer;font-family:inherit;font-size:15px;font-weight:' + (on ? "700" : "500") + ';color:'  + (on ? "#111827" : "#4B5563") + ';border-bottom:3px solid ' + (on ? "#4338CA" : "transparent") + '">' + esc(tab[1]) + '</button>';
+      }).join("") + '</div>';
+  }
+
+  function comingSoonTag(){
+    return '<span style="font-size:12px;font-weight:600;color:#3730A3;background:#E0E3FD;padding:4px 10px;border-radius:999px">Coming soon</span>';
+  }
+
+  function placeholderBox(title, text){
+    return '<div style="border:1px dashed #D1D5DB;border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:6px">' +
+      '<b style="font-size:14px">' + esc(title) + '</b><span class="eg-small eg-muted">' + esc(text) + '</span></div>';
+  }
+
+  function scoreRing(s){
+    var value = s.score === null || s.score === undefined ? null : s.score;
+    var color = value === null ? "#9CA3AF" : value >= 90 ? "#15803D" : value >= 50 ? "#D97706" : "#B91C1C";
+    var pct = value === null ? 0 : value;
+    return '<div style="display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center">' +
+      '<span role="img" aria-label="' + esc(s.label + ": " + (value === null ? "not available" : value + " out of 100")) + '" style="width:64px;height:64px;border-radius:50%;background:conic-gradient(' + color + ' 0 ' + pct + '%,#E5E7EB ' + pct + '% 100%);display:flex;align-items:center;justify-content:center">' +
+      '<span style="width:50px;height:50px;border-radius:50%;background:#F8F9FC;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:16px">' + (value === null ? "-" : value) + '</span></span>' +
+      '<span style="font-size:12px;color:#374151">' + esc(s.label) + '</span></div>';
+  }
+
+  function brandReportHtml(){
+    var r = state.brandReport;
+    var body;
+    if (!r || state.brandReportBusy) {
+      body = '<div class="eg-empty">Checking your website... this can take up to a minute.</div>';
+    } else if (r.status === "no_website") {
+      body = '<div class="eg-empty">Add your website address in Account to get your report. <span class="eg-cardlink" data-goto="account">Go to Account &rarr;</span></div>';
+    } else if (r.status !== "ok") {
+      body = '<div class="eg-empty">' + esc(r.reason || "We couldn't check your website just now.") + '</div>';
+    } else {
+      var wins = (r.quick_wins || []).map(function(w){
+        return '<span style="font-size:14px;background:#FEF6E4;color:#92400E;padding:10px 14px;border-radius:10px">' + esc(w) + '</span>';
+      }).join("") || '<span class="eg-small eg-muted">No quick wins - your website is in good shape.</span>';
+      body = '<div class="eg-grid3" style="margin-top:4px">' +
+        '<div style="background:#F8F9FC;border-radius:12px;padding:18px;display:flex;flex-direction:column;gap:14px;grid-column:span 1">' +
+        '<div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><b style="font-size:15px">Website</b><a class="eg-small" href="' + esc(r.url) + '" target="_blank" rel="noopener">' + esc(r.url.replace(/^https?:\/\//, "")) + '</a></div>' +
+        '<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px">' + (r.scores || []).map(scoreRing).join("") + '</div>' +
+        (r.load_time ? '<span class="eg-small eg-muted">Shows on a phone in ' + esc(r.load_time) + '</span>' : '') + '</div>' +
+        '<div style="background:#F8F9FC;border-radius:12px;padding:18px;display:flex;flex-direction:column;gap:10px"><div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><b style="font-size:15px">Google Business Profile</b>' + comingSoonTag() + '</div>' +
+        '<span class="eg-small eg-muted">Your star rating and reviews, whether your hours match, photos and your menu link.</span></div>' +
+        '<div style="background:#F8F9FC;border-radius:12px;padding:18px;display:flex;flex-direction:column;gap:10px"><div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><b style="font-size:15px">Social</b>' + comingSoonTag() + '</div>' +
+        '<span class="eg-small eg-muted">Facebook and Instagram: connected or not, and when you last posted.</span></div>' +
+        '</div>' +
+        '<div style="display:flex;flex-direction:column;gap:10px;border-top:1px solid #F1F2F4;padding-top:16px;margin-top:16px"><b style="font-size:15px">Quick wins</b>' +
+        '<div data-brand-wins style="display:flex;flex-wrap:wrap;gap:10px">' + wins + '</div></div>' +
+        '<div class="eg-small eg-muted" style="margin-top:10px">Checked ' + esc(fmtTime(r.checked_at)) + ' · ' + esc(r.source || "") + '</div>';
+    }
+    var canRecheck = r && r.status !== "no_website" && !state.brandReportBusy;
+    return '<div class="eg-card" data-brand-report>' +
+      '<div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px;margin-bottom:12px">' +
+      '<div><h3 style="margin:0;font-size:18px">Your online presence report</h3><div class="eg-small eg-muted">How your website does for customers on a phone</div></div>' +
+      (canRecheck ? '<button class="eg-btn small ghost" type="button" id="egBrandRecheck">Check again</button>' : '') + '</div>' + body + '</div>';
+  }
+
+  function brandTabHtml(){
+    var days = "";
+    for (var i = 1; i <= 28; i += 1) {
+      days += '<span style="height:44px;border:1px dashed #D1D5DB;border-radius:8px;display:flex;justify-content:flex-end;padding:4px 6px;font-size:11px;color:#9CA3AF">' + i + '</span>';
+    }
+    var week = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map(function(d){ return '<span>' + d + '</span>'; }).join("");
+    return brandReportHtml() +
+      '<div class="eg-grid2">' +
+      '<div class="eg-card" data-brand-planner><div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px"><h3 style="margin:0;font-size:17px">This month\'s posts &amp; reels</h3>' + comingSoonTag() + '</div>' +
+      '<div style="display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px;font-size:11px;color:#4B5563;text-align:center;margin-top:12px">' + week + '</div>' +
+      '<div style="display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px;margin-top:6px">' + days + '</div>' +
+      '<p class="eg-small eg-muted">Plan a month of posts and reels from your menu, offers and what customers ask about - then approve them, and they go out on time.</p>' +
+      '<div style="display:flex;gap:10px;flex-wrap:wrap"><button class="eg-btn" type="button" disabled>Plan my month</button><button class="eg-btn ghost" type="button" disabled>Approve posts</button></div></div>' +
+      '<div class="eg-card"><div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px"><h3 style="margin:0;font-size:17px">Next up &amp; what worked</h3>' + comingSoonTag() + '</div>' +
+      '<div style="display:flex;flex-direction:column;gap:12px;margin-top:12px">' +
+      placeholderBox("Next posts waiting for you", "Your next posts and reels, ready to approve or change.") +
+      placeholderBox("Reel clips needed", "Short phone clips to film, sent to us on WhatsApp.") +
+      placeholderBox("What worked", "Reach and likes for your recent posts, and which kinds do best.") +
+      '</div></div></div>';
+  }
+
+  function insightsTabHtml(){
+    var t = state.today || {}, x = t.tiles || {}, w = t.week || {};
+    var tile = function(color, label, value, sub){
+      return metricCard({ label: label, value: value, color: color, icon: "spark", sub: sub ? esc(sub) : "" });
+    };
+    return '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:16px">' +
+      '<div class="eg-small eg-muted">This week, so far. Month and 3-month views are coming.</div>' +
+      '<button class="eg-btn ghost" type="button" disabled>Download monthly report (PDF) · coming soon</button></div>' +
+      '<div class="eg-grid4" data-insights-numbers>' +
+      tile("purple", "Staff time saved", (x.hours_saved_week || 0) + " hrs", "About, from " + (x.conversations_week || 0) + " calls and chats") +
+      tile("green", "Requests taken", w.requests || 0, "Orders, bookings and messages") +
+      tile("blue", "Calls & chats", x.conversations_week || 0, "Answered by your assistant") +
+      tile("amber", "Done without staff", w.done_without_staff_pct === null || w.done_without_staff_pct === undefined ? "-" : w.done_without_staff_pct + "%", (w.handed_to_team || 0) + " handed to your team") +
+      '</div>' +
+      '<div class="eg-grid2">' +
+      '<div class="eg-card"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px"><h3 style="margin:0;font-size:17px">Calls and chats per day</h3>' + comingSoonTag() + '</div>' +
+      '<div style="height:160px;border:1px dashed #D1D5DB;border-radius:10px;margin-top:12px;display:flex;align-items:center;justify-content:center" class="eg-small eg-muted">Your trend over the month</div></div>' +
+      '<div class="eg-card"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px"><h3 style="margin:0;font-size:17px">Busiest hours</h3>' + comingSoonTag() + '</div>' +
+      '<div style="height:160px;border:1px dashed #D1D5DB;border-radius:10px;margin-top:12px;display:flex;align-items:center;justify-content:center" class="eg-small eg-muted">Day and hour, darker is busier</div></div>' +
+      '</div>' +
+      '<div class="eg-grid3">' +
+      '<div class="eg-card">' + cardHead("spark", "What customers asked", "", "") + '<div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">' +
+      ((w.most_asked || []).map(function(q, n){ return '<div style="font-size:14px">' + (n + 1) + ". " + esc(q) + '</div>'; }).join("") || '<div class="eg-small eg-muted">No questions yet this week</div>') + '</div></div>' +
+      '<div class="eg-card"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px"><h3 style="margin:0;font-size:17px">Most ordered &amp; asked for</h3>' + comingSoonTag() + '</div>' +
+      '<p class="eg-small eg-muted">Your top items, and what customers asked for that isn\'t on your menu.</p></div>' +
+      '<div class="eg-card"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px"><h3 style="margin:0;font-size:17px">From enquiry to booking</h3>' + comingSoonTag() + '</div>' +
+      '<p class="eg-small eg-muted">Enquiries, bookings, who came in, and no-shows.</p></div>' +
+      '</div>';
+  }
+
   function clientDashboardHtml(){
     var CLIENT_HERO = '<div class="eg-hero eg-hero-img"><img src="img/client-banner.jpg" alt="Welcome to EdgifyNow. Turn Conversations Into Business. Manage your AI assistant, leads, appointments and channels in one powerful workspace." /></div>';
+    var tab = state.dashTab || "today";
+    if (tab === "brand") return dashTabsHtml() + brandTabHtml();
     var t = state.today;
     if (state.todayFailed && !t) {
-      return CLIENT_HERO + '<div class="eg-card"><div class="eg-empty">Your day summary couldn\'t load right now. Your activity is still in All Activity.</div></div>';
+      return dashTabsHtml() + '<div class="eg-card"><div class="eg-empty">Your day summary couldn\'t load right now. Your activity is still in All Activity.</div></div>';
     }
     if (!t) return CLIENT_HERO + '<div class="eg-card"><div class="eg-empty">Loading your day...</div></div>';
-    return todayStripHtml(t) + todayTilesHtml(t) +
-      '<div class="eg-grid2">' + todayAttentionHtml(t) + todayPlanHtml(t) + '</div>' +
-      todayWeekHtml(t) + todayAskHtml();
+    if (tab === "insights") return dashTabsHtml() + insightsTabHtml();
+    return dashTabsHtml() + todayStripHtml(t) + todayTilesHtml(t) +
+      '<div class="eg-grid2" data-today-row="1">' + todayAttentionHtml(t) + todayWeekHtml(t) + '</div>' +
+      '<div class="eg-grid2" data-today-row="2">' + todayPlanHtml(t) + todayAskHtml() + '</div>';
+  }
+
+  function setDashTab(tab){
+    state.dashTab = tab;
+    if (tab === "brand" && !state.brandReport && !state.brandReportBusy) loadBrandReport(false);
+    render();
+  }
+
+  function loadBrandReport(refresh){
+    state.brandReportBusy = true;
+    render();
+    api("/api/v1/crm/brand/report" + (refresh ? "?refresh=true" : "")).then(function(d){
+      state.brandReport = d; state.brandReportBusy = false; render();
+    }).catch(function(err){
+      state.brandReport = { status: "unavailable", reason: "We couldn't check your website just now. Please try again later." };
+      state.brandReportBusy = false; showToast(err.message, true); render();
+    });
   }
 
   function openTodayItem(n){
@@ -1329,8 +1466,17 @@
 
   function bindDashboard(){
     document.querySelectorAll("[data-goto]").forEach(function(el){
-      el.addEventListener("click", function(){ setView(el.getAttribute("data-goto")); });
+      el.addEventListener("click", function(){
+        var target = el.getAttribute("data-goto");
+        if (target.indexOf("dashboard:") === 0) { setDashTab(target.slice(10)); return; }
+        setView(target);
+      });
     });
+    document.querySelectorAll("[data-dash-tab]").forEach(function(el){
+      el.addEventListener("click", function(){ setDashTab(el.getAttribute("data-dash-tab")); });
+    });
+    var recheck = document.getElementById("egBrandRecheck");
+    if (recheck) recheck.addEventListener("click", function(){ loadBrandReport(true); });
     document.querySelectorAll("[data-today-item]").forEach(function(el){
       el.addEventListener("click", function(){ openTodayItem(parseInt(el.getAttribute("data-today-item"), 10)); });
     });
@@ -5711,6 +5857,7 @@
       bindKnowledge: bindKnowledge,
       renderCaptureTile: renderCaptureTile,
       openTodayItem: openTodayItem,
+      setDashTab: setDashTab,
       clientDashboardHtml: clientDashboardHtml,
       navItems: navItems,
       leadsHtml: leadsHtml,
