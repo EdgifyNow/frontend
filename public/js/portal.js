@@ -614,6 +614,8 @@
       api("/api/v1/admin/tenants").then(function(d){ if (setIfChanged("tenants", d)) render(); }).catch(function(){});
     } else {
       api("/api/v1/crm/leads").then(function(d){ if (setIfChanged("leads", d)) render(); }).catch(function(){});
+      api("/api/v1/crm/today").then(function(d){ state.todayFailed = false; if (setIfChanged("today", d)) render(); })
+        .catch(function(){ state.todayFailed = true; render(); });
       api("/api/v1/crm/contacts").then(function(d){ if (setIfChanged("contacts", d)) render(); }).catch(function(){});
       api("/api/v1/documents").then(function(d){ if (setIfChanged("documents", d)) render(); }).catch(function(){});
       api("/api/v1/assistants").then(function(d){ if (setIfChanged("assistants", d)) render(); }).catch(function(){});
@@ -936,7 +938,7 @@
   }
 
   function viewTitle(){
-    if (state.view === "dashboard") return isAdmin() ? "Platform Overview" : ("Good day, " + (state.user.email.split("@")[0]));
+    if (state.view === "dashboard") return isAdmin() ? "Platform Overview" : (((state.today && state.today.greeting) || "Good day") + ", " + (state.user.email.split("@")[0]));
     if (state.view === "leads") return "Leads & Contacts";
     if (state.view === "knowledge") return "Knowledge Base";
     if (state.view === "assistant") return "AI Assistant";
@@ -955,7 +957,7 @@
     return "";
   }
   function viewSub(){
-    if (state.view === "dashboard") return isAdmin() ? "Monitor clients, usage, and platform activity from one place." : "Your AI assistant, CRM and channels in one workspace.";
+    if (state.view === "dashboard") return isAdmin() ? "Monitor clients, usage, and platform activity from one place." : (state.today ? state.today.date_label + " · here's your day" : "Your AI assistant, CRM and channels in one workspace.");
     if (state.view === "leads") return "Manage leads and contacts captured from your website and channels.";
     if (state.view === "knowledge") return "Documents powering your AI assistant's answers.";
     if (state.view === "assistant") return "Configure and test your AI assistant.";
@@ -1057,83 +1059,163 @@
       '</div>';
   }
 
+  // ---- The owner's day (GET /crm/today): what the assistant did, what
+  // needs them, today's plan and the week - in the business's own day.
+  var TODAY_KIND = {
+    order: { label: "ORDER", bg: "#FEF6E4", tag: "#FDE7B0", fg: "#92400E", action: "Review" },
+    booking: { label: "BOOKING", bg: "#FEF6E4", tag: "#FDE7B0", fg: "#92400E", action: "Review" },
+    check: { label: "CHECK", bg: "#FDECEC", tag: "#FBD0D0", fg: "#991B1B", action: "Open" },
+    callback: { label: "CALL BACK", bg: "#EEF1FE", tag: "#DADFFD", fg: "#3730A3", action: "Open" },
+    question: { label: "QUESTION", bg: "#F4F5F7", tag: "#E5E7EB", fg: "#374151", action: "Add answer" },
+    lead: { label: "LEAD", bg: "#F4F5F7", tag: "#E5E7EB", fg: "#374151", action: "Open" }
+  };
+
+  function clockText(hhmm){
+    var parts = String(hhmm || "").split(":"), h = parseInt(parts[0], 10), m = parts[1] || "00";
+    if (isNaN(h)) return hhmm || "";
+    return (h % 12 || 12) + ":" + m + " " + (h < 12 ? "AM" : "PM");
+  }
+
+  function todayStripHtml(t){
+    var o = t.overnight || {}, bits = [];
+    if (o.conversations) bits.push(o.conversations + (o.conversations === 1 ? " call or chat" : " calls and chats") + " answered while you were closed");
+    if (o.orders) bits.push(o.orders + (o.orders === 1 ? " order" : " orders") + " taken");
+    if (o.bookings) bits.push(o.bookings + (o.bookings === 1 ? " booking" : " bookings") + " made");
+    if (o.callbacks) bits.push(o.callbacks + (o.callbacks === 1 ? " call-back" : " call-backs") + " waiting");
+    var title = bits.length ? "Your assistant worked while you were closed" : "Your assistant is on duty";
+    var line = bits.length ? bits.join(" · ") : "Answering your calls and chats around the clock. Anything that needs you shows below.";
+    return '<div data-today-strip style="background:#4338CA;color:#fff;border-radius:16px;padding:18px 24px;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px">' +
+      '<div style="display:flex;flex-direction:column;gap:4px"><span style="font-size:12px;font-weight:700;letter-spacing:.1em;color:#C7D2FE;text-transform:uppercase">' + esc(title) + '</span>' +
+      '<span style="font-size:17px;font-weight:700">' + esc(line) + '</span></div>' +
+      '<span class="eg-cardlink" data-goto="all" style="color:#fff">See all activity &rarr;</span></div>';
+  }
+
+  function todayTilesHtml(t){
+    var x = t.tiles || {};
+    var waiting = x.waiting_by_kind || {}, waitBits = [];
+    var orders = (waiting.order || 0) + (waiting.booking || 0);
+    if (orders) waitBits.push(orders + " to approve");
+    if (waiting.check) waitBits.push(waiting.check + " to check");
+    if (waiting.callback) waitBits.push(waiting.callback + (waiting.callback === 1 ? " call-back" : " call-backs"));
+    var sub = function(text){ return '<div class="eg-metric-sub">' + esc(text) + '</div>'; };
+    return '<div class="eg-grid4">' +
+      metricCard({ label: "Calls & chats today", value: x.conversations_today || 0, color: "blue", icon: "users",
+        sub: x.handled_pct === null || x.handled_pct === undefined ? "" : esc(x.handled_pct + "% handled by your assistant") }) +
+      metricCard({ label: t.takes_orders ? "Orders & bookings today" : "Bookings & requests today", value: x.requests_today || 0, color: "green", icon: "doc",
+        sub: x.orders_total ? esc("$" + x.orders_total + " in orders (menu prices)") : "" }) +
+      metricCard({ label: "Waiting for you", value: x.waiting || 0, color: "amber", icon: "funnel",
+        sub: waitBits.length ? esc(waitBits.join(" · ")) : "All caught up" }) +
+      metricCard({ label: "Time saved this week", value: (x.hours_saved_week || 0) + " hrs", color: "purple", icon: "trophy",
+        sub: esc("About, from " + (x.conversations_week || 0) + " calls and chats") }) +
+      '</div>';
+  }
+
+  function todayAttentionHtml(t){
+    var items = t.attention || [];
+    var rows = items.map(function(i, n){
+      var k = TODAY_KIND[i.kind] || TODAY_KIND.lead;
+      var action = i.kind === "callback" && i.phone
+        ? '<a class="eg-cardlink" href="tel:' + esc(i.phone) + '">Call</a>'
+        : '<span class="eg-cardlink" data-today-item="' + n + '">' + esc(k.action) + '</span>';
+      return '<div data-today-kind="' + esc(i.kind) + '" style="display:flex;gap:12px;align-items:center;padding:12px 14px;border-radius:10px;background:' + k.bg + '">' +
+        '<span style="flex:none;font-size:11px;font-weight:700;color:' + k.fg + ';background:' + k.tag + ';padding:4px 8px;border-radius:6px">' + k.label + '</span>' +
+        '<div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px"><span style="font-weight:600;font-size:14px">' + esc(i.title) + '</span>' +
+        '<span class="eg-small eg-muted">' + esc(i.detail || "") + (i.at ? " · " + esc(fmtTime(i.at)) : "") + '</span></div>' + action + '</div>';
+    }).join("");
+    var more = (t.attention_total || 0) > items.length ? '<div class="eg-small eg-muted">and ' + (t.attention_total - items.length) + ' more in All Activity</div>' : "";
+    return '<div class="eg-card">' + cardHead("flag", "Needs your attention", "View All Activity", "all") +
+      (rows ? '<div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">' + rows + '</div>' + more
+            : '<div class="eg-empty">Nothing needs you right now.</div>') + '</div>';
+  }
+
+  function todayPlanHtml(t){
+    var rows = (t.plan || []).map(function(p){
+      return '<li style="display:flex;gap:14px;padding:11px 0;border-bottom:1px solid #F1F2F4">' +
+        '<span style="flex:none;width:72px;font-weight:700;font-size:14px">' + esc(clockText(p.time)) + '</span>' +
+        '<div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:14px;font-weight:600">' + esc(p.title) + '</span>' +
+        '<span class="eg-small eg-muted">' + esc(p.detail || "") + '</span></div></li>';
+    }).join("");
+    return '<div class="eg-card">' + cardHead("clock", "Today's plan", "Appointments", "appointments") +
+      (rows ? '<ol data-today-plan style="list-style:none;margin:8px 0 0;padding:0">' + rows + '</ol>'
+            : '<div class="eg-empty">Nothing scheduled today.</div>') + '</div>';
+  }
+
+  function todayWeekHtml(t){
+    var w = t.week || {};
+    var days = w.busiest_days || [], top = Math.max.apply(null, days.map(function(d){ return d.count; }).concat([1]));
+    var shades = ["#E0E3FD", "#C7CDFB", "#A5AEF7", "#8790F2", "#6A75EC", "#4F5BE0", "#3743C9"];
+    var strip = days.map(function(d){
+      var shade = shades[Math.min(6, Math.round(6 * d.count / top))];
+      return '<div style="display:flex;flex-direction:column;gap:4px;align-items:center"><span title="' + esc(d.day + ": " + d.count) + '" style="width:100%;height:28px;border-radius:4px;background:' + shade + '"></span><span class="eg-small eg-muted">' + esc(d.day) + '</span></div>';
+    }).join("");
+    var busiest = days.slice().sort(function(a, b){ return b.count - a.count; })[0];
+    var peak = busiest && busiest.count ? "Busiest on " + busiest.day + (w.peak_hour !== null && w.peak_hour !== undefined ? ", around " + clockText(w.peak_hour + ":00") : "") : "Not enough calls yet";
+    var asked = (w.most_asked || []).map(function(q, n){ return '<div style="font-size:14px">' + (n + 1) + ". " + esc(q) + '</div>'; }).join("") ||
+      '<div class="eg-small eg-muted">No questions yet this week</div>';
+    return '<div class="eg-card" data-today-week>' + cardHead("spark", "This week", "", "") +
+      '<div class="eg-grid3" style="margin-top:8px">' +
+      '<div style="display:flex;flex-direction:column;gap:8px"><b style="font-size:13px">Busiest times (last 4 weeks)</b>' +
+      '<div role="img" aria-label="Calls and chats by day of the week" style="display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px">' + strip + '</div>' +
+      '<span class="eg-small eg-muted">' + esc(peak) + '</span></div>' +
+      '<div style="display:flex;flex-direction:column;gap:6px"><b style="font-size:13px">Most asked</b>' + asked + '</div>' +
+      '<div style="display:flex;flex-direction:column;gap:6px"><b style="font-size:13px">Your assistant</b>' +
+      '<div style="font-size:14px">' + (w.done_without_staff_pct === null || w.done_without_staff_pct === undefined ? "No calls or chats yet" : esc(w.done_without_staff_pct + "% done without staff")) + '</div>' +
+      '<div style="font-size:14px">' + esc((w.requests || 0) + " requests taken") + '</div>' +
+      '<div style="font-size:14px">' + esc((w.handed_to_team || 0) + " handed to your team") + '</div>' +
+      '<div style="font-size:14px">' + esc((w.flagged || 0) + " flagged to check") + '</div></div>' +
+      '</div></div>';
+  }
+
+  function todayAskHtml(){
+    var a = state.todayAsk || {};
+    var chips = ["Summarize this week", "Who hasn't been called back?", "What's on today?", "What did customers ask most?"];
+    return '<div class="eg-card" data-today-ask>' + cardHead("spark", "Ask your assistant", "", "") +
+      '<form id="egTodayAskForm" style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px">' +
+      '<label for="egTodayAsk" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">Ask your assistant</label>' +
+      '<input class="eg-input" id="egTodayAsk" style="flex:1 1 320px;min-height:44px" placeholder="How many orders this week? Who called about catering?" value="' + esc(a.question || "") + '" />' +
+      '<button class="eg-btn" type="submit"' + (a.busy ? " disabled" : "") + '>' + (a.busy ? "Thinking..." : "Ask") + '</button></form>' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">' + chips.map(function(c){
+        return '<button class="eg-btn small ghost" type="button" data-today-chip="' + esc(c) + '">' + esc(c) + '</button>';
+      }).join("") + '</div>' +
+      (a.answer ? '<div data-today-answer style="margin-top:14px;padding:14px;border-radius:10px;background:#F5F6FB;white-space:pre-wrap;font-size:14px">' + esc(a.answer) + '</div>' : '') +
+      '<div class="eg-small eg-muted" style="margin-top:10px">Answers come from your calls, chats, orders, bookings and leads. Your assistant can\'t change anything from here yet.</div>' +
+      '</div>';
+  }
+
   function clientDashboardHtml(){
     var CLIENT_HERO = '<div class="eg-hero eg-hero-img"><img src="img/client-banner.jpg" alt="Welcome to EdgifyNow. Turn Conversations Into Business. Manage your AI assistant, leads, appointments and channels in one powerful workspace." /></div>';
-    if (!state.leads || !state.contacts) {
-      return CLIENT_HERO + '<div class="eg-card"><div class="eg-empty">Loading...</div></div>';
+    var t = state.today;
+    if (state.todayFailed && !t) {
+      return CLIENT_HERO + '<div class="eg-card"><div class="eg-empty">Your day summary couldn\'t load right now. Your activity is still in All Activity.</div></div>';
     }
+    if (!t) return CLIENT_HERO + '<div class="eg-card"><div class="eg-empty">Loading your day...</div></div>';
+    return todayStripHtml(t) + todayTilesHtml(t) +
+      '<div class="eg-grid2">' + todayAttentionHtml(t) + todayPlanHtml(t) + '</div>' +
+      todayWeekHtml(t) + todayAskHtml();
+  }
 
-    var rows = joinedLeads();
-    var now = new Date();
-    var inMonth = function(d, offset){
-      var m = now.getMonth() + (offset || 0), y = now.getFullYear();
-      while (m < 0) { m += 12; y -= 1; }
-      return d.getFullYear() === y && d.getMonth() === m;
-    };
-    var monthCount = rows.filter(function(r){ return inMonth(new Date(r.created_at)); }).length;
-    var lastMonthCount = rows.filter(function(r){ return inMonth(new Date(r.created_at), -1); }).length;
-    var wkAgo = now.getTime() - 7 * 864e5, twoWkAgo = now.getTime() - 14 * 864e5;
-    var newThisWk = rows.filter(function(r){ var t = new Date(r.created_at).getTime(); return t >= wkAgo; }).length;
-    var newLastWk = rows.filter(function(r){ var t = new Date(r.created_at).getTime(); return t >= twoWkAgo && t < wkAgo; }).length;
-    var newCount = rows.filter(function(r){ return r.status === "new"; }).length;
-    var qualifiedCount = rows.filter(function(r){ return r.status === "qualified"; }).length;
-    var wonCount = rows.filter(function(r){ return r.status === "won"; }).length;
+  function openTodayItem(n){
+    var item = ((state.today || {}).attention || [])[n];
+    if (!item) return;
+    var link = item.link || {};
+    if (link.capture_id) { setView("all"); openChannelDrawer(CHANNEL_ACTIVITY.all, link.capture_id); return; }
+    if (link.lead_id) { openLeadDrawer(link.lead_id); return; }
+    setView(link.view || "all");
+  }
 
-    var todayKey = now.getFullYear() + "-" + String(now.getMonth() + 1).padStart(2, "0") + "-" + String(now.getDate()).padStart(2, "0");
-    // The day each lead was created on in the viewer's own calendar, not
-    // the UTC date in the timestamp's text - that rolled over to "tomorrow"
-    // every evening (8 pm Eastern), hiding the evening's leads from today.
-    var localDayKey = function(iso){
-      var d = new Date(iso);
-      if (isNaN(d)) return "";
-      return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
-    };
-    var todayRows = rows.filter(function(r){ return localDayKey(r.created_at) === todayKey; })
-      .sort(function(a, b){ return new Date(b.created_at) - new Date(a.created_at); });
-    var todayHtml = todayRows.map(function(r){
-      return '<tr class="eg-clickrow" style="cursor:pointer" data-lead-drawer="' + esc(r.id) + '">' +
-        '<td><b>' + esc(contactName(r.contact)) + '</b></td>' +
-        '<td>' + esc(r.service_interest || r.title || "-") + '</td>' +
-        '<td><span class="eg-tag">' + esc(sourceLabel(r.source)) + '</span></td>' +
-        '<td>' + fmtTime(r.created_at) + '</td>' +
-        '<td>' + statusPill(r.status) + '</td></tr>';
-    }).join("");
-
-    var weekStart = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-    var openStatuses = ["new", "contacted", "qualified", "booked"];
-    var weekRows = rows.filter(function(r){
-      if (openStatuses.indexOf(r.status) === -1) return false;
-      var activity = new Date(r.last_activity_at || r.created_at);
-      return activity >= weekStart;
-    }).sort(function(a, b){
-      return new Date(b.last_activity_at || b.created_at) - new Date(a.last_activity_at || a.created_at);
+  function askToday(question){
+    question = String(question || "").trim();
+    if (!question) return;
+    state.todayAsk = { question: question, busy: true, answer: (state.todayAsk || {}).answer };
+    render();
+    api("/api/v1/crm/today/ask", { method: "POST", body: { question: question } }).then(function(d){
+      state.todayAsk = { question: question, answer: d.answer };
+      render();
+    }).catch(function(err){
+      state.todayAsk = { question: question, answer: "Sorry, I couldn't answer that right now." };
+      showToast(err.message, true);
+      render();
     });
-    var weekHtml = weekRows.map(function(r){
-      return '<tr class="eg-clickrow" style="cursor:pointer" data-lead-drawer="' + esc(r.id) + '">' +
-        '<td><b>' + esc(contactName(r.contact)) + '</b></td>' +
-        '<td>' + esc(r.service_interest || r.title || "-") + '</td>' +
-        '<td><span class="eg-tag">' + esc(sourceLabel(r.source)) + '</span></td>' +
-        '<td>' + statusPill(r.status) + '</td>' +
-        '<td class="eg-small eg-muted">' + fmtDate(r.last_activity_at || r.created_at) + '</td></tr>';
-    }).join("");
-
-    return CLIENT_HERO +
-      '<div class="eg-grid4">' +
-      metricCard({ label: "Leads This Month", value: monthCount, color: "blue", icon: "users", trend: trendLine(monthCount, lastMonthCount, "from last month") }) +
-      metricCard({ label: "New", value: newCount, color: "green", icon: "doc", trend: trendLine(newThisWk, newLastWk, "from last week") }) +
-      metricCard({ label: "Qualified", value: qualifiedCount, color: "amber", icon: "funnel", trend: trendLine(qualifiedCount, null) }) +
-      metricCard({ label: "Won", value: wonCount, color: "purple", icon: "trophy", trend: trendLine(wonCount, null) }) +
-      '</div>' +
-      '<div class="eg-grid2">' +
-      '<div class="eg-card">' + cardHead("flag", "New Leads Today", "View All Leads", "leads") +
-      '<p class="eg-small eg-muted" style="margin:2px 0 12px">Leads created today, newest first.</p>' +
-      (todayHtml ? '<table class="eg-table"><thead><tr><th>Lead</th><th>Interest</th><th>Source</th><th>Time</th><th>Status</th></tr></thead><tbody>' + todayHtml + '</tbody></table>' : '<div class="eg-empty">No New Leads Today</div>') +
-      '</div>' +
-      '<div class="eg-card">' + cardHead("clock", "This Week's Attention", "View All Activity", "leads") +
-      '<p class="eg-small eg-muted" style="margin:2px 0 12px">Open leads with activity this week, newest activity first.</p>' +
-      (weekHtml ? '<table class="eg-table"><thead><tr><th>Lead</th><th>Interest</th><th>Source</th><th>Status</th><th>Last Activity</th></tr></thead><tbody>' + weekHtml + '</tbody></table>' : '<div class="eg-empty">Nothing needs attention this week.</div>') +
-      '</div>' +
-      '</div>';
   }
 
   function statusPillForTenant(t){
@@ -1248,6 +1330,17 @@
   function bindDashboard(){
     document.querySelectorAll("[data-goto]").forEach(function(el){
       el.addEventListener("click", function(){ setView(el.getAttribute("data-goto")); });
+    });
+    document.querySelectorAll("[data-today-item]").forEach(function(el){
+      el.addEventListener("click", function(){ openTodayItem(parseInt(el.getAttribute("data-today-item"), 10)); });
+    });
+    var askForm = document.getElementById("egTodayAskForm");
+    if (askForm) askForm.addEventListener("submit", function(e){
+      e.preventDefault();
+      askToday(document.getElementById("egTodayAsk").value);
+    });
+    document.querySelectorAll("[data-today-chip]").forEach(function(el){
+      el.addEventListener("click", function(){ askToday(el.getAttribute("data-today-chip")); });
     });
     document.querySelectorAll("[data-tenant-id]").forEach(function(row){
       row.addEventListener("click", function(){ openTenantDetail(row.getAttribute("data-tenant-id")); });
@@ -5617,6 +5710,7 @@
       knowledgeHtml: knowledgeHtml,
       bindKnowledge: bindKnowledge,
       renderCaptureTile: renderCaptureTile,
+      openTodayItem: openTodayItem,
       clientDashboardHtml: clientDashboardHtml,
       navItems: navItems,
       leadsHtml: leadsHtml,

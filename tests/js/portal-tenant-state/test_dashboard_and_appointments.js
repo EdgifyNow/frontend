@@ -1,8 +1,7 @@
-// The dashboard's "New Leads Today" uses the viewer's own calendar day (an
-// evening lead in New York is today there, though its UTC date is
-// tomorrow), and the Appointments tab lists upcoming ones soonest first,
-// then past ones most recent first. Real public/js/portal.js in jsdom.
-// Run with TZ=America/New_York.
+// The dashboard shows the owner's day (GET /crm/today, worked out in the
+// business's own day on the server), and the Appointments tab lists upcoming
+// ones soonest first, then past ones most recent first. Real
+// public/js/portal.js in jsdom. Run with TZ=America/New_York.
 
 const fs = require("fs");
 const path = require("path");
@@ -31,20 +30,16 @@ function buildPage() {
   return { win, hooks };
 }
 
-// A lead made just now: in the evening in New York its UTC date is
-// already tomorrow; it must still be one of today's.
+// The day as the server worked it out: shown as it is.
 {
   const { win, hooks } = buildPage();
-  const justNow = new Date().toISOString();
-  hooks.state.contacts = [{ id: "c1", first_name: "Vishesh" }];
-  hooks.state.leads = [{ id: "l1", contact_id: "c1", status: "new", source: "website_chat", title: "Website lead", created_at: justNow }];
+  hooks.state.today = { date_label: "Monday, November 9", greeting: "Good morning", takes_orders: true,
+    overnight: {}, tiles: { conversations_today: 3, waiting: 1, waiting_by_kind: { lead: 1 } },
+    attention: [{ kind: "lead", title: "New lead · Vishesh", detail: "No reply for 2 days", at: null, link: { lead_id: "l1" } }],
+    attention_total: 1, plan: [], week: {} };
   win.document.getElementById("egTest").innerHTML = hooks.clientDashboardHtml();
   const text = win.document.getElementById("egTest").textContent;
-  assert(!text.includes("No New Leads Today"), "a lead made just now is in New Leads Today");
-
-  // And the case directly: 11:11 pm in New York is 03:11 UTC the next day.
-  const evening = new Date(2026, 9, 18, 23, 11);           // local (New York) wall clock
-  assert(evening.toISOString().slice(0, 10) === "2026-10-19", "precondition: UTC date is the next day (TZ=" + process.env.TZ + ")");
+  assert(text.includes("New lead · Vishesh"), "a lead waiting for a reply is in Needs your attention");
 }
 
 // Appointments: upcoming soonest first, then past most recent first.
